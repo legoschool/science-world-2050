@@ -1,0 +1,36 @@
+.writeup{display:block;color:#203449;line-height:1.6}
+.mission-writeup{max-width:1000px;margin:0 auto;padding:20px;background:#f8faf6;border-radius:16px}
+.writeup h3{margin:4px 0 10px}.writeup h4{margin:0 0 6px;font-size:1.05rem}.writeup p{margin:6px 0}
+.writeup-talk{display:flex;gap:12px;align-items:flex-start;background:#fff;border:1px solid #ccd7dc;border-radius:12px;padding:10px 14px;margin:8px 0 14px}
+.writeup-talk img{width:56px;height:56px;image-rendering:pixelated;flex:none}.writeup-talk strong{display:block}
+.writeup-evidence,.writeup-write{background:#fff;border:1px solid #ccd7dc;border-radius:12px;padding:12px 14px;margin:12px 0}
+.writeup-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin:8px 0}
+.writeup .writeup-card{display:flex;flex-direction:column;align-items:stretch;text-align:left;margin:0;padding:0;overflow:hidden;background:#fff;color:#203449;border:2px solid #b7c7cf;border-radius:10px;cursor:pointer;min-height:44px}
+.writeup .writeup-card canvas{display:block;width:100%;height:auto;background:#142a3d}
+.writeup-card-text{display:flex;flex-direction:column;gap:2px;padding:8px 10px;font-size:.88rem}
+.writeup .writeup-card[aria-pressed=true]{border-color:#235c63;box-shadow:0 0 0 3px #235c6355;background:#eaf4f2;color:#203449}
+.writeup .writeup-card[aria-pressed=true] .writeup-card-text b::after{content:" 근거로 고름";font-weight:600;color:#235c63}
+.writeup-ask{font-weight:600}.writeup-guide{margin:6px 0 8px;padding-left:1.4em}
+.writeup-terms{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.writeup-term{display:inline-block;padding:2px 10px;border-radius:999px;background:#fff3d6;border:1px solid #d7b45c}
+.writeup-field{display:block;margin:10px 0}.writeup-field>span{display:block;font-weight:600;margin-bottom:4px}
+.writeup textarea,.writeup input[type=text]{box-sizing:border-box;width:100%;max-width:100%;padding:10px;border:1px solid #849fa9;border-radius:8px;font:inherit;color:#203449;background:#fff}
+.writeup textarea{min-height:9em;resize:vertical}
+.writeup-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
+.writeup button{white-space:normal;min-height:44px;background:#fff;color:#203449;border:1px solid #8da5b4;border-radius:8px;padding:9px 15px;font:inherit;cursor:pointer}
+.writeup .writeup-primary{background:#235c63;color:#fff;border-color:#235c63;margin-left:auto}
+.writeup button:disabled{opacity:.6;cursor:progress}
+.writeup button:focus-visible,.writeup textarea:focus-visible,.writeup input:focus-visible{outline:3px solid #bb7410;outline-offset:3px}
+.writeup-concept,.writeup-prev,.writeup-mine,.writeup-chosen,.writeup-check,.writeup-feedback{border-radius:10px;padding:10px 14px;margin:10px 0}
+.writeup-concept{background:#e5eee5}.writeup-prev{background:#eef2f5;border-left:4px solid #8da5b4}
+.writeup-mine{background:#fff;border:1px solid #ccd7dc;white-space:pre-wrap;overflow-wrap:anywhere}
+.writeup-chosen{background:#eef2f5}.writeup-chosen ul,.writeup-check ul{margin:4px 0;padding-left:1.3em}
+.writeup-check{background:#fffaf0;border:1px solid #e3cf9c}.writeup-check li.used{color:#1f5f3a}.writeup-check li.missing{color:#7a4b00}
+.writeup-note{font-size:.88rem;color:#4a5d6b}
+.writeup-feedback{background:#eef6fb;border:1px solid #9cc3d6}.writeup-feedback.revise{background:#fff4e8;border-color:#e0a462}.writeup-feedback.confirmed{background:#eaf6ee;border-color:#8cc4a0}
+.writeup-feedback-text{white-space:pre-wrap;overflow-wrap:anywhere;font-weight:600}
+.writeup-sent-head{font-weight:700;font-size:1.05rem}.writeup-sent-head:focus{outline:none}
+.writeup-history summary{cursor:pointer;font-weight:600;padding:6px 0}.writeup-history li{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.writeup-status{font-weight:600;min-height:1.2em}
+.discovery-writeup{margin-top:10px}
+@media(max-width:640px){.mission-writeup{padding:12px}.writeup-cards{grid-template-columns:1fr 1fr}.writeup .writeup-primary{margin-left:0;width:100%}}
+@media(max-width:420px){.writeup-cards{grid-template-columns:1fr}}

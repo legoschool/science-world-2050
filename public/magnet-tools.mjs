@@ -1,0 +1,4 @@
+const groups=[['조립 도구',['테이프 붙임','볼트에 테이프 붙이기','한 방향으로 촘촘하게 감기','양 끝에 약 5 cm 여유 남기기','양 끝의 피복만 벗기기','감긴 부분까지 피복 모두 벗기기','양 끝을 회로에 연결']],['공방 둘러보기',['동료에게 제작 카드 남기기','공방의 첫 단서 살펴보기','공방 재료 서랍 열기','붙지 않는 인양 장치 점검']]];
+export function organizeMagnetTools(panel,{el,opened}){
+for(const [name,labels]of groups){const buttons=[...panel.children].filter(n=>n.tagName==='BUTTON'&&labels.includes(n.textContent));if(!buttons.length)continue;const details=el('details',{class:'magnet-toolbox'}),summary=el('summary',{},name),contents=el('div',{class:'magnet-tool-actions'});details.open=Boolean(opened[name]);details.append(summary,contents);panel.insertBefore(details,buttons[0]);buttons.forEach(b=>contents.append(b));details.addEventListener('toggle',()=>{if(details.isConnected)opened[name]=details.open});}
+}

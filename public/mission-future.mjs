@@ -331,7 +331,7 @@ export function nameCard({el, button, mode, task = {}, memory = {}, others = {},
     const j = JOBS[card.job];
     const extras = chk.extra.map((x) => x === 'friendPhoto' ? el('div', {class: 'fu-bad'}, '척척이 넣은 칸: 함께 찍은 친구 얼굴 사진', button('이 칸 빼기', () => { chk.extra = chk.extra.filter((y) => y !== x); paintCheck(); }, 'bench-opt')) : el('div', {class: 'fu-bad'}, '척척이 넣은 칸: 친구 연락처 010-0000-0000', button('이 칸 빼기', () => { chk.extra = chk.extra.filter((y) => y !== x); paintCheck(); }, 'bench-opt')));
     box.replaceChildren(j ? cardView(j, extras) : el('p', {}, '명함이 아직 없어요.'),
-      el('ul', {class: 'cn-check'}, CHECKS.map(([id, t]) => { const on = chk.ticks.includes(id); return el('li', {class: on ? 'ok' : ''}, el('span', {}, t), button(on ? '확인함' : '확인하기', () => { if (id === 'noOther' && chk.extra.length) { status.textContent = '아직 다른 사람의 정보가 들어간 칸이 있어요. 먼저 빼요.'; return; } chk.ticks = toggle(chk.ticks, id); paintCheck(); }, 'bench-opt')); })));
+      el('ul', {class: 'cn-check'}, CHECKS.map(([id, t]) => { const on = chk.ticks.includes(id); return el('li', {class: on ? 'ok' : ''}, el('span', {}, t), button(on ? '확인함' : '이 줄 확인', () => { if (id === 'noOther' && chk.extra.length) { status.textContent = '아직 다른 사람의 정보가 들어간 칸이 있어요. 먼저 빼요.'; return; } chk.ticks = toggle(chk.ticks, id); paintCheck(); }, 'bench-opt')); })));
     const pass = !chk.extra.length && CHECKS.every(([id]) => chk.ticks.includes(id));
     status.textContent = pass ? '점검을 모두 통과했어요.' : '명함을 살펴보고 점검표를 하나씩 확인해요.';
     if (pass && !fired) { fired = true; chk.done = true; onAction('checked'); onReady?.(); }

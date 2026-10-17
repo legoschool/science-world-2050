@@ -90,15 +90,44 @@ function drawHead(c, id, cx, top0, hw, dir) {
     const cups = side ? [cx - side * 2] : [cx - h - 3, cx + h + 3];
     for (const x of cups) { p.r(x - 5, top + 16, 10, 13, INK); p.r(x - 4, top + 17, 8, 11, '#e2503f'); p.r(x - 3, top + 18, 3, 5, '#ff9a8a'); }
   } else if (id === 'goggles') {
-    p.r(cx - h - 1, top + 9, hw + 2, 4, INK); p.r(cx - h, top + 10, hw, 2, '#3b4a5a');
-    const lenses = dir === 'up' ? [] : side ? [cx + side * (h - 9)] : [cx - 9, cx + 9];
-    for (const x of lenses) { p.oval(x, top + 9, 7, 6, INK); p.oval(x, top + 9, 6, 5, '#8fdcf0'); p.r(x - 3, top + 6, 2, 2, '#ffffff'); }
+    const eyeY = top0 + 23, strap = Math.min(30, hw), half = strap / 2;
+    p.r(cx - half - 1, eyeY - 1, strap + 2, 3, INK); p.r(cx - half, eyeY, strap, 1, '#3b4a5a');
+    const lenses = dir === 'up' ? [] : side ? [cx + side * (half - 7)] : [cx - 6, cx + 6];
+    for (const x of lenses) { p.oval(x, eyeY, 5, 4, INK); p.oval(x, eyeY, 4, 3, '#8fdcf0'); p.r(x - 2, eyeY - 2, 1, 2, '#ffffff'); }
   } else if (id === 'crown') {
     const w = Math.max(22, hw - 10), x0 = cx - w / 2;
     p.r(x0 - 1, top - 1, w + 2, 9, INK); p.r(x0, top, w, 7, '#f2c14e');
     for (let i = 0; i < 3; i++) { const x = x0 + (i * (w - 10)) / 2; p.tri(x - 1, top - 11, 12, 11, INK); p.tri(x + 1, top - 9, 8, 9, '#f2c14e'); }
     p.r(cx - 2, top + 2, 4, 3, '#d8343a'); p.r(x0 + 3, top + 2, 3, 3, '#2659c8'); p.r(x0 + w - 6, top + 2, 3, 3, '#3aa04b');
   }
+}
+
+// 소품 외곽을 먼저 구한다. 걸을 때 머리가 칸 가장자리로 움직여도 모자 일부가 잘리지 않게 한다.
+// 원래 그림과 발 위치는 유지하고, 소품이 칸 밖으로 나가는 경우에만 안쪽으로 옮긴다.
+const headArt = new Map();
+function fitHead(c, id, cx, top, hw, dir, fw, fh) {
+  const key = `${id}|${hw}|${dir}`;
+  if (!headArt.has(key)) {
+    const draft = document.createElement('canvas'); draft.width = 128; draft.height = 96;
+    const d = draft.getContext('2d', {willReadFrequently: true});
+    drawHead(d, id, 64, 32, hw, dir);
+    const data = d.getImageData(0, 0, draft.width, draft.height).data;
+    let left = draft.width, right = -1, above = draft.height, below = -1;
+    for (let y = 0; y < draft.height; y++) for (let x = 0; x < draft.width; x++) if (data[(y * draft.width + x) * 4 + 3]) {
+      left = Math.min(left, x); right = Math.max(right, x); above = Math.min(above, y); below = Math.max(below, y);
+    }
+    if (right < left) headArt.set(key, null);
+    else {
+      const image = document.createElement('canvas'); image.width = right - left + 1; image.height = below - above + 1;
+      image.getContext('2d').drawImage(draft, left, above, image.width, image.height, 0, 0, image.width, image.height);
+      headArt.set(key, {image, dx: left - 64, dy: above - 32});
+    }
+  }
+  const art = headArt.get(key);
+  if (!art) return;
+  const x = Math.max(0, Math.min(fw - art.image.width, Math.round(cx + art.dx)));
+  const y = Math.max(0, Math.min(fh - art.image.height, Math.round(top + art.dy)));
+  c.drawImage(art.image, x, y);
 }
 
 // 등 소품: front가 참이면 몸 위(뒷모습), 거짓이면 몸 뒤에 그린다
@@ -142,7 +171,7 @@ function anchors(data, W, x0, y0, fw, fh) {
   for (let y = 0; y < fh && top < 0; y++) for (let x = 0; x < fw; x++) if (op(x, y)) { top = y; break; }
   if (top < 0) return null;
   const span = (ya, yb) => { let a = fw, b = -1; for (let y = ya; y < Math.min(fh, yb); y++) for (let x = 0; x < fw; x++) if (op(x, y)) { if (x < a) a = x; if (x > b) b = x; } return b < 0 ? null : [a, b]; };
-  const head = span(top, top + 24) || [0, fw - 1], torso = span(top + 36, top + 48) || head;
+  const head = span(top, top + 20) || [0, fw - 1], torso = span(top + 36, top + 48) || head;
   return {cx: (head[0] + head[1]) / 2, top, hw: head[1] - head[0] + 1, tcx: (torso[0] + torso[1]) / 2, ty: top + 34, tw: Math.min(30, torso[1] - torso[0] + 1)};
 }
 export function dressSheet(sheet, wear) {
@@ -158,13 +187,16 @@ export function dressSheet(sheet, wear) {
   const out = document.createElement('canvas'); out.width = W; out.height = H;
   const c = out.getContext('2d'); c.imageSmoothingEnabled = false;
   const rows = Math.round(H / m.fh);
+  const points = Array.from({length: rows}, (_, r) => Array.from({length: m.cols}, (_, col) => anchors(data, W, col * m.fw, r * m.fh, m.fw, m.fh)));
+  // 걷는 장면마다 머리카락 폭을 재면 모자가 늘었다 줄어든다. 방향별 대표 폭을 유지한다.
+  const widths = points.map(row => { const w = row.filter(Boolean).map(a => a.hw).sort((a, b) => a - b); return Math.min(34, w[Math.floor(w.length / 2)] || 30); });
   for (let r = 0; r < rows; r++) for (let col = 0; col < m.cols; col++) {
-    const x0 = col * m.fw, y0 = r * m.fh, dir = ROWS[r] || 'down', a = anchors(data, W, x0, y0, m.fw, m.fh);
+    const x0 = col * m.fw, y0 = r * m.fh, dir = ROWS[r] || 'down', a = points[r][col];
     c.save(); c.beginPath(); c.rect(x0, y0, m.fw, m.fh); c.clip(); c.translate(x0, y0);
     if (a && wear.back) drawBack(c, wear.back, a.tcx, a.ty, a.tw, dir, false);
     c.drawImage(sheet, x0, y0, m.fw, m.fh, 0, 0, m.fw, m.fh);
     if (a && wear.back) drawBack(c, wear.back, a.tcx, a.ty, a.tw, dir, true);
-    if (a && wear.head) drawHead(c, wear.head, a.cx, a.top, a.hw, dir);
+    if (a && wear.head) fitHead(c, wear.head, a.cx, a.top, widths[r], dir, m.fw, m.fh);
     c.restore();
   }
   out.meta = m; out.lookKey = (sheet.lookKey || '') + '+' + key;

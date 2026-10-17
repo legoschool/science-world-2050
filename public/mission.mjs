@@ -1,6 +1,9 @@
 import {openTeaching} from './teaching-ui.mjs';
 import {discovery} from './discovery.mjs';
 import {writeupView} from './writeup.mjs';
+import {learningSupport} from './learning-support.mjs';
+import {openTextbook} from './textbook.mjs';
+import {answerHint} from './answer-support.mjs';
 // 공용 미션 화면. data/missions/*.json에 적힌 과제를 순서대로 보여 주고, 채점은 서버(/api/mission-check)가 한다.
 // 정답 열쇠는 학생 브라우저로 보내지 않는다. 학생 화면에는 장소, 이야기, 할 일, 도움말, 실제 저장 상태만 보여 준다.
 import {signalDevice, PATTERNS, patternLabel, blips} from './mission-signal.mjs';
@@ -100,7 +103,10 @@ function shuffled(list, seed) {
 }
 const batchim = (w) => { const c = w.charCodeAt(w.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 !== 0; };
 
-export function missionScreen(host, {el, button, state, record, save, back, api, id, onFinish, avatarView, nickname, uid, preview = false}) {
+export function missionScreen(host, {el, button, state, record, save, back, api, id, onFinish, avatarView, nickname, uid, preview = false, quick = false}) {
+  // 빠르게 문제만: 앞뒤 대사를 한 줄 상황으로 줄이고 의뢰 고르기 판으로 돌아간다. 과제, 채점, 기록, 도움은 이야기 길과 같다.
+  const backLabel = quick ? '의뢰 고르기로' : '지도로 돌아가기';
+  const situation = (lines) => (lines || []).find(([who]) => !/척척|알림|단말|방송/.test(who)) || (lines || [])[0];
   let alive = true, m = null, stopTask = () => {}, top = null, wu = null;
   state.missions ??= {};
   let ms = state.missions[id];
@@ -114,7 +120,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
   // 설명 쓰기 문항(writeup)은 의뢰 원본과 따로 온다. 의뢰를 예전 판으로 이어 가는 학생도 같은 문항을 쓴다.
   Promise.all([api('mission?id=' + encodeURIComponent(id) + (ms.contentRevision?'&revision='+encodeURIComponent(ms.contentRevision):'')), api('writeup?id=' + encodeURIComponent(id)).catch(() => null)])
     .then(([data, w]) => { if (!alive) return; m = data; wu = w?.item ? w : null; ms.contentRevision=data.contentRevision; ms.gameVersion=data.version; save(); if (!ms.seen) intro(); else render(); })
-    .catch(() => { if (alive) root.replaceChildren(el('p', {class: 'mission-loading'}, '의뢰를 불러오지 못했어요. 연결을 확인하고 다시 들어와 주세요.'), button('지도로 돌아가기', leave)); });
+    .catch(() => { if (alive) root.replaceChildren(el('p', {class: 'mission-loading'}, '의뢰를 불러오지 못했어요. 연결을 확인하고 다시 들어와 주세요.'), button(backLabel, leave)); });
 
   const openDex = (card) => window.dispatchEvent(new CustomEvent('open-dex', {detail: {card}}));
   function leave() { if (!alive) return; alive = false; stopTask(); window.removeEventListener('mission-leave', leave); save(); back(m?.zone || MISSIONS[id]?.zone); } // 의뢰를 불러오지 못했어도 그 의뢰의 구역으로 돌아간다
@@ -125,15 +131,17 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
   const show = (node, msg, tone) => { node.className = 'm-feedback ' + (tone || ''); node.replaceChildren(...[].concat(msg)); reveal(node); };
   function line([who, text]) {
     const key = PORTRAIT[who];
-    return el('div', {class: 'm-line' + (key ? '' : ' system')},
-      key ? el('img', {src: `/assets/portraits/${key}.png`, alt: ''}) : el('span', {class: 'm-sys-icon', 'aria-hidden': 'true'}, '!'),
+    // 경고 상자 모양은 척척 같은 기계 알림에만 쓴다. 그림이 없는 사람(연구소장, 주민)은 이름 첫 글자 동그라미로 보인다.
+    const machine = !key && /척척|알림|단말|방송/.test(who);
+    return el('div', {class: 'm-line' + (key ? '' : machine ? ' system' : ' person')},
+      key ? el('img', {src: `/assets/portraits/${key}.png`, alt: ''}) : el('span', {class: machine ? 'm-sys-icon' : 'm-person-icon', 'aria-hidden': 'true'}, machine ? '!' : String(who || '').slice(0, 1)),
       el('div', {class: 'm-line-body'}, el('strong', {}, who === '미스터리' ? '미스터리 선생님' : who), el('p', {}, text)));
   }
   // 필수 과제만 차례로 진행한다. 선택 과제(더 해보기)는 단계 목록과 마무리 화면에서 골라 들어간다.
   const current = () => m.tasks.findIndex((t) => !ms.done[t.id] && !(t.optional || t.required === false));
   const required = () => m.tasks.filter((t) => !(t.optional || t.required === false));
   const extras = () => m.tasks.filter((t) => t.optional || t.required === false);
-  const stepNo = (t) => (t.optional ? '더 해보기' : `${required().indexOf(t) + 1}단계`);
+  const stepNo = (t) => (t.optional ? '더 해보기' : `${required().indexOf(t) + 1} / ${required().length}단계`); // 전체 단계 수를 함께 보여 남은 양을 알게 한다
   // 실천표: log가 같은 기록 과제(quiz)의 day 문항이 날짜 칸, 나머지 문항이 줄이 된다. 칸에는 보기의 mark를 적는다.
   function logTable(t) {
     const src = m.tasks.find((x) => x.log === t.log && x.parts), day = src?.parts.find((q) => q.id === 'day'), log = ms.mem?.[t.log] || {};
@@ -156,12 +164,13 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     const lines = el('div', {class: 'mission-intro-lines', 'aria-live': 'polite'});
     let i = 0;
     const next = button('다음', () => step(), 'mission-go');
+    const said = quick ? [situation(m.intro)].filter(Boolean) : m.intro || [];
     function step() {
-      if (i < (m.intro || []).length) { lines.append(line(m.intro[i++])); next.textContent = i < m.intro.length ? '다음' : '조사 시작'; holdButtons([next]); return; }
+      if (i < said.length) { lines.append(line(said[i++])); next.textContent = i < said.length ? '다음' : '조사 시작'; if (!quick) holdButtons([next]); return; }
       ms.seen = true; save(); render();
     }
     box.append(el('div', {class: 'mission-intro-title'}, el('small', {}, m.quest), el('h1', {}, m.place), el('p', {}, '배울 내용: ' + m.goal)),
-      lines, el('div', {class: 'mission-intro-actions'}, button('지도로 돌아가기', leave, 'secondary'), next));
+      lines, el('div', {class: 'mission-intro-actions'}, button(backLabel, leave, 'secondary'), next));
     root.replaceChildren(box);
     step();
     next.focus();
@@ -178,8 +187,9 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     node.append(el('div', {class: 'mission-name'}, el('small', {}, m.quest), el('h1', {}, m.place)),
       el('div', {class: 'mission-meter', role: 'img', 'aria-label': `${req.length}단계 가운데 ${doneN}단계 완료`}, el('span', {class: 'mission-meter-bar'}, fill), el('b', {}, `${doneN} / ${req.length}`)),
       el('details', {class: 'mission-steps-pop'}, el('summary', {}, '할 일 목록'), stepList(i)),
+      button('교과서 펼쳐 보기', () => openTextbook({el, button, api, mission: id}), 'secondary mission-book'),
       button('선생님 활동',()=>openTeaching({api,uid,gameId:id,runId:state.runId,edition:m.contentRevision,onTask:tid=>{const n=m.tasks.findIndex(t=>t.id===tid);if(n>=0)render(n);}})),
-      button('지도로 돌아가기', leave, 'mission-leave'));
+      button(backLabel, leave, 'mission-leave'));
     return node;
   }
   function stepList(i) {
@@ -228,8 +238,20 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     const fb = el('p', {class: 'm-feedback', role: 'status'}), hintBox = el('div', {class: 'm-hint', 'aria-live': 'polite'});
     const actions = el('div', {class: 'm-actions'});
     panel.append(el('div', {class: 'm-task-head'}, el('span', {class: 'm-task-no'}, stepNo(t)), el('h2', {id: 'mt-title'}, t.title)),
+      learningSupport(el, t.support || {goal: m.goal, next: t.how}, {renderFigure: data => figure(el, data, 'circuit-fig big'), openBook: (start) => openTextbook({el, button, api, mission: id, start})}),
       el('div', {class: 'm-talk'}, (t.say || []).map(line)), t.note ? el('div', {class: 'm-note'}, t.note.split(String.fromCharCode(10)).map((x) => el('p', {}, x))) : '', stage, work, fb, hintBox, actions);
     let busy = false, misses = 0;
+    const gradingEdition = t.answerRevision ? {answerRevision: t.answerRevision} : {};
+    const hintUsed = () => Math.max(ms.hints[t.id] || 0, ms.initialHints?.[t.id] ? 1 : 0);
+    let lastMissing = [];
+    const initials = t.answerSupport ? answerHint({el, button, api, missing: () => lastMissing,
+      payload: () => ({gameId: id, taskId: t.id, contentRevision: m.contentRevision, ...gradingEdition}),
+      isActive: () => alive && stage.isConnected,
+      onHint: () => {
+        (ms.initialHints ??= {})[t.id] = true;
+        record('mission.hint', 'mission', {gameId: id, gameVersion: m.version, contentRevision: m.contentRevision, taskId: t.id, answer: 'initials', hint: hintUsed(), ...gradingEdition});
+        save();
+      }}) : null;
     const wasDoneEarly = !!ms.done[t.id];
     const gateNote = el('p', {class: 'm-how gate-note'}, t.gateText || '먼저 위의 활동을 끝내면 이 칸을 쓸 수 있어요.');
     const ctx = {stage, work, fb, submit: (r) => submit(r)};
@@ -243,7 +265,9 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     if (t.memo) {
       const src = m.tasks.find((x) => x.remember === t.memo), got = ms.mem[t.memo];
       const lines = src && got ? (src.parts || []).map((q) => `${q.prompt} ${q.options.find((o) => o.id === got[q.id])?.label || ''}`) : [];
-      stage.append(el('div', {class: 'm-note recall'}, el('p', {}, el('strong', {}, '내가 한 예상')), lines.length ? lines.map((s) => el('p', {}, s)) : el('p', {}, '저장된 예상이 없어요.')));
+      // 처음 생각을 남긴 과제(진단, 「생각」 과제)는 「처음 내 생각」, 예상 과제는 「내가 한 예상」. 남긴 것이 없으면(선택 과제를 하지 않음) 상자를 두지 않는다.
+      const head = src?.diagnostic || /생각/.test(src?.title || '') ? '처음 내 생각' : '내가 한 예상';
+      if (lines.length) stage.append(el('div', {class: 'm-note recall'}, el('p', {}, el('strong', {}, head)), lines.map((s) => el('p', {}, s))));
     }
     const ui = UI[t.type](t, ctx);
     if (!t.component) requestAnimationFrame(() => ui.mounted?.());
@@ -251,12 +275,15 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     if (t.component && COMPONENTS[t.component]) {
       // save: 장면이 중간 진행(memory)을 바로 저장하고 싶을 때 부른다. 쓰지 않는 장면은 무시한다.
       dev = COMPONENTS[t.component]({el, button, mode: t.mode, memory: ms.mem, others: state.missions, save, avatarView, nickname, task: t, mission: m, owner: ['fix', 'receive'].includes(t.mode) ? '신항이의 신호기' : '내 신호기',
-        onAction: (a) => submit({answer: a}), onReady: () => { ui.unlock?.(); if (!ms.done[t.id] && !ui.lock) { work.inert = false; work.classList.remove('gated'); gateNote.remove(); } }, onPattern: (p) => ui.pattern?.(p)});
+        // 저장된 장면은 생성 중 바로 결과를 알릴 수 있다. 단추와 안내가 준비된 뒤 처리한다.
+        onAction: (a) => queueMicrotask(() => { if (alive && stage.isConnected) submit({answer: a}); }),
+        onReady: () => queueMicrotask(() => { if (!alive || !stage.isConnected) return; ui.unlock?.(); if (!ms.done[t.id] && !ui.lock) { work.inert = false; work.classList.remove('gated'); gateNote.remove(); } }),
+        onPattern: (p) => ui.pattern?.(p)});
       stage.append(dev.node);
       ui.mounted?.(dev);
     }
     if (t.predict) predictGate(t, stage, [dev?.node, work].filter(Boolean), wasDoneEarly);
-    stopTask = () => { dev?.stop(); ui.stop?.(); };
+    stopTask = () => { dev?.stop(); ui.stop?.(); initials?.dispose(); };
     if (t.gate && ui.lock) ui.lock(true, t.gateText || '먼저 위의 장면에서 활동을 끝내 주세요.');
     else if (t.gate && !wasDoneEarly) { work.inert = true; work.classList.add('gated'); work.before(gateNote); }
     const check = button('확인하기', () => { const r = ui.collect(); if (typeof r === 'string') return show(fb, r, 'warn'); submit(r); }, 'mission-go');
@@ -274,6 +301,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     // 선택 과제는 풀지 않고 할 일로 돌아갈 수 있다. 둘러보기(체험 계정)는 풀지 않고 다음 과제를 볼 수 있다.
     const skipBtn = t.optional && !wasDone ? button(current() < 0 ? '마무리 화면으로' : '할 일로 돌아가기', () => render(), 'secondary') : '';
     const peekBtn = preview ? button(i < m.tasks.length - 1 ? '다음 과제 보기' : '마무리 화면 보기', () => (i < m.tasks.length - 1 ? render(i + 1) : finish()), 'secondary m-peek') : '';
+    if (initials) work.after(initials.node);
     actions.append(t.hints?.length ? helpBtn : '', skipBtn, peekBtn, check, retryBtn, nextBtn);
     if (ui.auto && !wasDone && ms.pend?.[t.id]) { show(fb, '지난번에 보내지 못한 결과가 있어요. 다시 보내고 있어요.', 'warn'); setTimeout(() => { if (alive && stage.isConnected && !busy && ms.pend?.[t.id]) submit(ms.pend[t.id]); }, 0); }
     function paintHelp() { const n = ms.hints[t.id] || 0; helpBtn.textContent = n >= 3 ? '도움 다시 보기' : `도움 받기 (${n}/3)`; }
@@ -296,18 +324,20 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       busy = true; check.disabled = true;
       if (ui.auto) { (ms.pend ??= {})[t.id] = {answer, roles}; retryBtn.hidden = true; }
       let res;
-      try { res = await api('mission-check', {gameId: id, gameVersion:m.version, contentRevision:m.contentRevision, taskId: t.id, answer, roles}); }
+      try { res = await api('mission-check', {gameId: id, gameVersion:m.version, contentRevision:m.contentRevision, taskId: t.id, answer, roles, ...gradingEdition}); }
       catch (e) {
         busy = false; check.disabled = false;
         if (ui.auto && e.status !== 400) { save(); retryBtn.hidden = false; return show(fb, '결과를 보내지 못했어요. 연결을 확인하고 「다시 보내기」를 눌러 주세요.', 'warn'); }
         if (ui.auto) delete ms.pend[t.id];
         return show(fb, e.status === 400 ? e.message : '연결을 확인하고 다시 눌러 주세요.', 'warn');
       }
+      // 응답을 기다리는 사이 다른 장소나 과제로 갔다면 대기 결과를 남겨 재진입 때 기록한다.
+      if (!alive || !stage.isConnected) return;
       if (ms.pend?.[t.id]) delete ms.pend[t.id];
-      if (!alive) return;
-      record('mission.answered', 'mission', {gameId: id, gameVersion:m.version, contentRevision:m.contentRevision, taskId: t.id, answer, roles, hint: ms.hints[t.id] || 0});
+      record('mission.answered', 'mission', {gameId: id, gameVersion:m.version, contentRevision:m.contentRevision, taskId: t.id, answer, roles, hint: hintUsed(), ...gradingEdition});
       busy = false; check.disabled = false;
       const ok = res.correct !== false;
+      lastMissing = res.answerCheck?.missing || []; initials?.mark();
       ui.mark?.(res.wrong || [], ok);
       sfx(ok ? 'ok' : 'wrong');
       if (!ok) {
@@ -315,14 +345,16 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         misses++;
         const extra = ui.wrongText?.(res.wrong || [], {answer, roles}), moreHelp = (ms.hints[t.id] || 0) < 3 && t.hints?.length;
         if (misses >= 2 && moreHelp) helpBtn.classList.add('m-help-pulse');
-        return show(fb, [extra || t.feedback?.wrong || '다시 살펴봐요.', moreHelp ? (misses >= 2 ? ' 「도움 받기」를 눌러 실마리를 확인해 보세요.' : ' 막히면 도움을 받아 보세요.') : ''].join(''), 'bad');
+        if (misses >= 2) initials?.offer();
+        // 장면별 안내(빨간 표시 수 등)와 과제의 다시 볼 곳(feedback.wrong)을 함께 보여 준다
+        return show(fb, [res.answerFeedback || [extra, t.feedback?.wrong].filter(Boolean).join(' ') || '다시 살펴봐요.', initials ? ' 「초성 힌트」에서 필요한 낱말을 떠올려 보세요.' : moreHelp ? (misses >= 2 ? ' 「도움 받기」를 눌러 실마리를 확인해 보세요.' : ' 막히면 도움을 받아 보세요.') : ''].join(''), 'bad');
       }
       ms.done[t.id] = true;
       if (t.remember) ms.mem[t.remember] = roles;
       if (t.log && roles.day) { (ms.mem[t.log] ??= {})[roles.day] = roles; stage.querySelector('.m-log')?.replaceWith(logTable(t)); }
       ui.saved?.({answer, roles});
       save();
-      show(fb, res.correct === true ? t.feedback?.right || '맞아요.' : t.feedback?.done || '기록했어요.', 'ok');
+      show(fb, res.correct === true ? res.answerFeedback || t.feedback?.right || '맞아요.' : t.feedback?.done || '기록했어요.', 'ok');
       panel.querySelector('.m-explain')?.remove(); panel.querySelector('.m-dex')?.remove();
       if (res.explain) { const ex = el('div', {class: 'm-explain'}, el('strong', {}, '해설'), el('p', {}, res.explain)); fb.after(ex); reveal(ex); }
       // 이 과제로 열리는 과학 도감 카드(처음 맞혔을 때만 알린다)
@@ -352,11 +384,13 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     if (mine?.p) { stage.prepend(recall(mine.p)); return; }
     if (done) return;
     const box = el('section', {class: 'm-predict', 'aria-label': '먼저 예상하기'}, el('strong', {}, '먼저 예상해요'), el('p', {}, t.predict.question));
+    // 흐리게 잠긴 장면이 왜 잠겼는지 알려 준다(예상을 고르면 열린다). 예상은 맞고 틀림을 따지지 않는다.
+    const opensNote = el('p', {class: 'm-predict-note'}, '예상을 하나 고르면 아래 장면이 열려요. 예상은 틀려도 괜찮아요.');
     const row = el('div', {class: 'm-options', role: 'group', 'aria-label': t.predict.question});
     // 보기는 회차마다 섞고, 첫 보기에 초점 테두리가 생기지 않게 상자에 초점을 둔다(정답 쪽으로 눈이 가지 않게)
     const opts = [...shuffled(t.predict.options, state.runId + id + t.id), ...poeOptions(t).filter((o) => !t.predict.options.includes(o))];
     for (const o of opts) row.append(button(o.label, () => choose(o.id), 'm-option'));
-    box.append(row); box.tabIndex = -1;
+    box.append(row, opensNote); box.tabIndex = -1;
     for (const x of targets) { x.inert = true; x.classList.add('poe-wait'); }
     stage.prepend(box);
     requestAnimationFrame(() => box.focus({preventScroll: true}));
@@ -487,18 +521,30 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         return withImg(x, o);
       });
       work.append(el('p', {class: 'm-how'}, '해당하는 것을 모두 누르세요.'), el('div', {class: 'm-options'}, btns));
-      return {collect: () => (on.size ? {answer: [...on].join(',')} : '하나 이상 골라 주세요.')};
+      // 덜 골랐는지, 아닌 것을 함께 골랐는지 알려 준다(어느 보기인지는 알려 주지 않는다)
+      const gap = (w) => (w.includes('extra') ? '고른 것 가운데 빼야 할 것이 섞여 있어요. 고른 보기를 하나씩 다시 따져 봐요.' : w.includes('more') ? '고른 것은 맞았는데, 맞는 것을 더 골라야 해요. 고르지 않은 보기도 다시 살펴봐요.' : '');
+      return {collect: () => (on.size ? {answer: [...on].join(',')} : '하나 이상 골라 주세요.'), wrongText: gap};
     },
     quiz(t, {work}) {
       const picks = {}, groups = {};
+      // 문항마다 같은 보기(예: 효율, 안전, 둘 다)를 쓰면 섞는 순서도 같게 해 같은 보기를 문항마다 새로 찾지 않게 한다
+      const same = t.parts.length > 1 && t.parts.every((q) => q.options.map((o) => o.label).sort().join('|') === t.parts[0].options.map((o) => o.label).sort().join('|'));
+      const order = same ? shuffled(t.parts[0].options, state.runId + t.id).map((o) => o.label) : null;
       for (const q of t.parts) {
-        const qo = shuffled(q.options, state.runId + t.id + q.id);
+        const qo = same ? order.map((label) => q.options.find((o) => o.label === label)) : shuffled(q.options, state.runId + t.id + q.id);
         const btns = qo.map((o) => radio(o.label, () => { picks[q.id] = o.id; btns.forEach((x, k) => x.setAttribute('aria-checked', String(qo[k].id === o.id))); groups[q.id].classList.remove('recheck'); }));
         groups[q.id] = el('fieldset', {class: 'm-quiz' + (q.figure ? ' with-fig' : '')}, el('legend', {}, q.prompt), figure(el, q.figure), el('div', {class: 'm-options', role: 'radiogroup', 'aria-label': q.prompt}, btns));
         work.append(groups[q.id]);
       }
       return {
-        collect: () => (t.parts.every((q) => picks[q.id]) ? {roles: {...picks}} : '모든 문항에 답해 주세요.'),
+        collect: () => {
+          const empty = t.parts.filter((q) => !picks[q.id]);
+          if (!empty.length) return {roles: {...picks}};
+          // 아직 고르지 않은 문항에 테두리를 두르고 첫 문항으로 옮겨 준다
+          for (const q of empty) groups[q.id].classList.add('recheck');
+          groups[empty[0].id].scrollIntoView({block: 'center', behavior: 'smooth'});
+          return `아직 고르지 않은 문항이 ${empty.length}개 있어요. 테두리가 생긴 문항을 골라 주세요.`;
+        },
         mark: (w) => { for (const k of w) groups[k]?.classList.add('recheck'); },
       };
     },
@@ -744,8 +790,10 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       const ta = el('textarea', {maxlength: '300', rows: '3', 'aria-label': t.title, placeholder: t.placeholder || ''});
       ms.texts ??= {};
       ta.value = ms.texts[t.id] || '';
+      ta.addEventListener('input', () => { ms.texts[t.id] = ta.value; ta.classList.remove('recheck'); save(); });
+      if (t.answerSupport) work.append(el('p', {class: 'm-how'}, '핵심 낱말이 들어가면 정답이에요. 같은 뜻의 말과 조사나 어미가 다른 표현도 괜찮아요.'));
       work.append(ta);
-      return {collect: () => (ta.value.trim() ? {answer: ta.value.trim()} : '한 문장 이상 남겨 주세요.'), saved: ({answer}) => { ms.texts[t.id] = answer; ms.question = answer; }};
+      return {collect: () => (ta.value.trim() ? {answer: ta.value.trim()} : '내 답을 적어 주세요.'), mark: (w, ok) => ta.classList.toggle('recheck', !ok), saved: ({answer}) => { ms.texts[t.id] = answer; ms.question = answer; }};
     },
     grid(t, {work}) {
       const on = {};
@@ -826,12 +874,14 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         const val = (id) => { const f = t.fields.find((x) => x.id === id), i = inputs[id]; return f?.kind === 'select' ? f.options.find((o) => o.id === i.value)?.label || '' : i.value.trim(); };
         preview.replaceChildren(el('small', {}, val(t.preview.kind) || '안내물'), el('strong', {}, val(t.preview.title) || '지킬 행동을 적어 보세요'), el('p', {}, val(t.preview.reason) ? '왜? ' + val(t.preview.reason) : ''), el('p', {class: 'check'}, val(t.preview.check) ? '확인 방법: ' + val(t.preview.check) : ''));
       }
+      if (t.answerSupport) work.append(el('p', {class: 'm-how'}, '설명은 핵심 낱말로 확인해요. 조사나 어미는 달라도 괜찮아요. 어려우면 초성 힌트를 열어 보세요.'));
       work.append(wrap, preview ? el('div', {class: 'm-poster-wrap'}, el('span', {class: 'm-how'}, '미리 보기'), preview) : '');
       paint();
       // keepPlan: 실천 계획으로 남길 칸 id 목록. 저장하면 recall 과제가 「내가 세운 실천 계획」으로 다시 보여 준다.
       const shown = (f) => (f.kind === 'select' ? f.options.find((o) => o.id === inputs[f.id].value)?.label || '' : inputs[f.id].value.trim());
       return {
         collect: () => { const roles = {}; for (const f of t.fields) { const v = inputs[f.id].value.trim(); if (f.required !== false && !v) return `'${f.label}' 칸을 채워 주세요.`; if (v) roles[f.id] = v; } return f0(roles); },
+        mark: wrong => { for (const [fieldId, input] of Object.entries(inputs)) input.classList.toggle('recheck', wrong.includes(fieldId)); },
         saved: () => { if (t.keepPlan) ms.plan = {lines: t.fields.filter((f) => t.keepPlan.includes(f.id) && shown(f)).map((f) => `${f.label}: ${shown(f)}`)}; },
       };
       function f0(roles) { const long = t.fields.find((f) => f.kind === 'long'); if (long && roles[long.id]) { const answer = roles[long.id]; delete roles[long.id]; return {answer, roles: {...roles, [long.id]: '(설명은 answer)'}}; } return {roles}; }
@@ -854,7 +904,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     },
     signal(t, {work, fb, submit}) {
       if (t.mode === 'send') {
-        const table = {...(ms.table || {})};
+        const table = {...(ms.signalDraft || ms.table || {})};
         let meaning = null;
         const rows = el('div', {class: 'm-table'}), sendBox = el('div', {class: 'm-send'});
         const patOf = (w) => PATTERNS.find((p) => table['p:' + p.id] === w)?.id;
@@ -862,22 +912,23 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
           rows.replaceChildren(el('h3', {}, '깜빡이 약속표'), ...PATTERNS.map((p) => {
             const s = el('select', {'aria-label': p.label + ' 신호의 뜻'}, el('option', {value: ''}, '뜻 고르기'), MEANINGS.map((w) => el('option', {value: w}, w)));
             s.value = table['p:' + p.id] || '';
-            s.addEventListener('change', () => { if (s.value) table['p:' + p.id] = s.value; else delete table['p:' + p.id]; meaning = null; paint(); });
+            s.addEventListener('change', () => { if (s.value) table['p:' + p.id] = s.value; else delete table['p:' + p.id]; meaning = null; ms.signalDraft = {...table}; save(); paint(); rows.querySelector(`[aria-label="${p.label} 신호의 뜻"]`)?.focus(); });
             return el('div', {class: 'm-table-row'}, blips(el, p.id), el('span', {}, p.label), s);
           }));
           const vals = Object.values(table), filled = PATTERNS.every((p) => table['p:' + p.id]), dup = new Set(vals).size !== vals.length;
           sendBox.replaceChildren();
           if (dup) return sendBox.append(el('p', {class: 'm-warn'}, '같은 뜻이 두 번 들어갔어요. 받는 사람이 헷갈리지 않게 서로 다른 뜻을 골라 주세요.'));
-          if (!filled) return sendBox.append(el('p', {class: 'm-how'}, '네 가지 깜빡임에 모두 뜻을 정해 주세요.'));
+          const n = PATTERNS.filter((p) => table['p:' + p.id]).length;
+          if (!filled) return sendBox.append(el('p', {class: 'm-how strong'}, `네 가지 깜빡임 가운데 ${n}가지에 뜻을 정했어요. 나머지 ${PATTERNS.length - n}가지도 서로 다른 뜻으로 정하면 여기에 「신항이에게 보낼 뜻」이 나와요.`));
           sendBox.append(el('h3', {}, '신항이에게 보낼 뜻'), el('div', {class: 'm-options'}, PATTERNS.map((p) => {
-            const w = table['p:' + p.id], x = radio(w, () => { meaning = w; paint(); });
+            const w = table['p:' + p.id], x = radio(w, () => { meaning = w; paint(); document.querySelector('.signal-device')?.scrollIntoView({block: 'center', behavior: 'smooth'}); });
             x.setAttribute('aria-checked', String(meaning === w));
             return x;
           })));
-          if (meaning) sendBox.append(el('p', {class: 'm-how strong'}, `위 신호기의 손잡이로 "${meaning}" 신호를 보내 보세요. `, blips(el, patOf(meaning)), ` ${patternLabel(patOf(meaning))}`));
+          if (meaning) sendBox.append(el('p', {class: 'm-how strong'}, `"${meaning}"의 약속은 `, blips(el, patOf(meaning)), ` ${patternLabel(patOf(meaning))}${batchim(patternLabel(patOf(meaning))) ? '이에요' : '예요'}. 위의 신호기에서 손잡이를 누르거나 「깜빡임을 골라 보내기」로 같은 모양을 만들어 보내세요.`));
         }
         paint();
-        work.append(rows, sendBox);
+        work.append(t.note ? '' : el('p', {class: 'm-how'}, '① 네 가지 신호에 서로 다른 뜻을 정해요. ② 보낼 뜻을 골라요. ③ 신호기에서 약속한 모양으로 보내요.'), rows, sendBox); // 과제 note에 순서가 있으면 같은 말을 두 번 쓰지 않는다
         return {
           auto: true, collect: () => '손잡이로 신호를 보내 보세요.',
           pattern: (p) => { if (!meaning) return show(fb, '먼저 약속표를 채우고 보낼 뜻을 골라 주세요.', 'warn'); submit({roles: {...table, sent: p, meaning}}); },
@@ -886,7 +937,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
             const want = Object.entries(roles).find(([k, v]) => k.startsWith('p:') && v === meaning)?.[0].slice(2);
             return `보낸 신호는 "${patternLabel(roles.sent)}"${batchim(patternLabel(roles.sent)) ? '이었어요' : '였어요'}. 약속표에서 "${meaning}"${batchim(meaning) ? '은' : '는'} ` + (want ? `"${patternLabel(want)}" 모양이에요. ` : '아직 모양이 정해지지 않았어요. ') + '손잡이를 짧게 누르면 짧은 깜빡임, 길게 누르고 있으면 긴 깜빡임이에요. 다시 보내 보세요.';
           },
-          saved: ({roles}) => { ms.table = Object.fromEntries(Object.entries(roles).filter(([k]) => k.startsWith('p:'))); ms.sent = roles.sent; },
+          saved: ({roles}) => { ms.table = Object.fromEntries(Object.entries(roles).filter(([k]) => k.startsWith('p:'))); ms.sent = roles.sent; delete ms.signalDraft; },
         };
       }
       const table = ms.table && Object.keys(ms.table).length >= 2 ? ms.table : DEFAULT_TABLE;
@@ -917,12 +968,12 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       save();
       onFinish?.(m);
     }
-    const scene = el('div', {class: 'mission-finish-scene'}), goBtn = button('지도로 돌아가기', leave, 'mission-go');
+    const scene = el('div', {class: 'mission-finish-scene'}), goBtn = button(backLabel, leave, 'mission-go');
     scene.style.backgroundImage = `url("${m.banner}")`;
     if (m.beacon) { const bk = el('span', {class: 'mission-beacon', 'aria-hidden': 'true'}); const r = (1672 / 700) / (1672 / 941); bk.style.left = m.beacon[0] + '%'; bk.style.top = (m.beacon[1] * r - 30 * (r - 1)) + '%'; scene.append(bk); }
     scene.append(el('div', {class: 'mission-finish-title'}, el('small', {}, '의뢰 해결'), el('h1', {}, m.finish?.title || m.quest)));
     const body = el('div', {class: 'mission-finish-body'},
-      (m.finish?.lines || []).map(line), (m.wrap || []).map((w) => line(['미스터리', w])),
+      (quick ? [] : m.finish?.lines || []).map(line), (m.wrap || []).map((w) => line(['미스터리', w])),
       el('div', {class: 'mission-clue'}, el('small', {}, '획득한 기록'), el('strong', {}, m.card), el('p', {}, m.finish?.clue || '')),
       finishDex(), poeSummary(),
       ms.question ? el('p', {class: 'mission-myq'}, '내가 남긴 질문: ' + ms.question) : null,
@@ -932,7 +983,8 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         (() => { const left = extras().filter((t) => !ms.done[t.id]); return left.length ? button(`더 해보기 ${left.length}개`, () => render(m.tasks.indexOf(left[0])), 'secondary') : null; })(),
         id === 'R5-G03' ? button('북쪽 마을 동토 탐사', () => { alive = false; stopTask(); window.removeEventListener('mission-leave', leave); save(); back('mission:R5-G10'); }, 'secondary') : null, goBtn));
     root.replaceChildren(el('section', {class: 'mission-finish'}, scene, body));
-    holdButtons([goBtn]); celebrate(scene);
+    if (!quick) holdButtons([goBtn]);
+    celebrate(scene);
     window.scrollTo({top: 0, behavior: 'smooth'});
   }
 

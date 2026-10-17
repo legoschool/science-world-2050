@@ -1,4 +1,8 @@
 import {reviewStatus} from './record-export.mjs';
+import {openLearningDashboard as showLearningDashboard} from './learning-dashboard.mjs';
+export function openLearningDashboard(options = {}) {
+  return showLearningDashboard({...options, onReview:options.onReview || (({student,classId}) => openTeaching({api:options.api,classId,initialStudent:student}))});
+}
 const el = (tag, props = {}, ...children) => {
   const n = document.createElement(tag);
   for (const [k,v] of Object.entries(props)) { if (k.startsWith('on')) n.addEventListener(k.slice(2),v); else if (k === 'class') n.className=v; else n.setAttribute(k,v); }
@@ -8,11 +12,11 @@ const el = (tag, props = {}, ...children) => {
 const button = (s, fn) => el('button',{type:'button',onclick:fn},s);
 const field = (s, input) => {if(!input.hasAttribute('aria-label'))input.setAttribute('aria-label',s);return el('label',{},el('span',{},s),input);};
 const option = (v,s) => el('option',{value:v},s);
-export async function openTeaching({api, classId, gameId, runId, uid, onTask, edition, kind = 'all'} = {}) {
+export async function openTeaching({api, classId, gameId, runId, uid, onTask, edition, kind = 'all', initialStudent = ''} = {}) {
   const d = el('dialog',{class:'teaching-dialog'}), body = el('div'), status = el('p',{role:'status'});
   d.append(button('닫기',()=>d.close()),el('h2',{},'선생님 활동과 피드백'),status,body);
   d.addEventListener('close',()=>d.remove(),{once:true}); document.body.append(d); d.showModal();
-  let selected='', data, filter=kind;
+  let selected=initialStudent, data, filter=kind;
   const query = () => new URLSearchParams(Object.fromEntries(Object.entries({classId,gameId,runId,student:selected}).filter(([,v])=>v))).toString();
   const act = fn => async () => { try { await fn(); } catch(e) { status.textContent=(e.status>=400&&e.status<500&&e.message)||'연결을 확인한 뒤 다시 시도해 주세요.'; } };
   async function load() {
@@ -20,7 +24,10 @@ export async function openTeaching({api, classId, gameId, runId, uid, onTask, ed
     if (data.staff && !selected && data.students.length) { selected=data.students[0].id; data=await api('teaching?'+query()); }
     draw();
   }
-  function draw() { body.replaceChildren(); if (data.staff) { editor(); reviewer(); } else student(); }
+  function draw() { body.replaceChildren(); if (data.staff) {
+    body.append(button('학습 대시보드',()=>openLearningDashboard({api,classId,gameId,runId,onReview:async value=>{selected=value.student;classId=value.classId;await act(load)();}})));
+    editor(); reviewer();
+  } else student(); }
   function editor() {
     let draft=null;
     const area=el('details',{},el('summary',{},'활동 등록과 차시 배정'));
@@ -49,9 +56,11 @@ export async function openTeaching({api, classId, gameId, runId, uid, onTask, ed
       item?.terms?.length?el('p',{},el('b',{},'꼭 넣을 말 '),item.terms.map(t=>t.word).join(', ')):'',
       el('p',{},el('b',{},'제출 '),`${n}번째 / ${oral?'선생님께 말로 설명하기로 함':'글로 씀'}`+(p.change?` / 학생이 적은 고친 점: ${p.change}`:'')),
       el('pre',{class:'teaching-evidence'},p.answer||(oral?'메모 없음':'')),
+      p.evaluation==='core_keywords'?el('p',{},el('b',{},'게임 핵심어 판정 '),p.correct?'정답':'핵심어 보완 필요',el('br'),el('small',{},'제출 당시 핵심어와 같은 뜻의 표현을 확인한 결과입니다. 조사와 어미는 채점하지 않으며 교사 평가는 별도로 남깁니다.')):'',
       el('div',{},el('b',{},'근거로 고른 관찰'),p.evidence?.length?el('ul',{},p.evidence.map(c=>el('li',{},`${c.conditionText} → ${c.observation}`+(c.recorded===false?' (이 회차 탐구 기록에서 찾지 못함)':'')))):el('p',{},'고른 관찰이 없습니다.')),
       p.terms?.length?el('p',{},el('b',{},'낱말 자동 확인 '),p.terms.map(t=>`${t.word} ${t.used?'있음'+(t.form&&t.form!==t.word?`(${t.form})`:''):'없음'}`).join(', '),el('br'),el('small',{},'낱말이 글에 들어 있는지만 센 결과입니다. 바르게 썼는지는 아래 항목에서 선생님이 판단합니다.')):'',
       p.help?.includes('concept')?el('p',{},'쓰는 동안 「정리한 내용 다시 보기」를 열었습니다.'):'',
+      p.help?.includes('initials')?el('p',{},'쓰는 동안 초성 힌트를 열었습니다.'):'',
       p.overlap>=20?el('p',{},`정리한 내용과 ${p.overlap}자가 그대로 겹칩니다. 자기 말로 다시 설명할 수 있는지 확인해 보세요.`):'',
       same.length>1?el('details',{},el('summary',{},`같은 의뢰에서 보낸 설명 ${same.length}개 차례로 보기`),...same.map((x,i)=>el('div',{class:'teaching-card'},el('strong',{},`${i+1}번째, ${new Date(x.received*1000).toLocaleString('ko-KR')}, ${reviewStatus(x)}`),el('pre',{class:'teaching-evidence'},x.payload.answer||'말로 설명하기'),x.teacherReview?.feedback?el('p',{},'보낸 피드백: '+x.teacherReview.feedback):''))):'',
       Object.keys(crit).length||item?.samples?el('details',{},el('summary',{},'평가 기준과 예시 답'),...Object.entries(RUBRIC.writeup).filter(([k])=>crit[k]).map(([k,v])=>el('p',{},el('b',{},v+' '),crit[k])),

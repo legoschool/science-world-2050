@@ -129,12 +129,15 @@ export function paintParts(c) {
 
 // ---------------------------------------------------------------- 작업대
 // mode: 'test' 회로 카드 확인, 'fix' 고장 회로 고치기, 'flashlight' 손전등 완성
-export function circuitBench({el, button, mode, memory = {}, onAction, onReady}) {
+export function circuitBench({el, button, mode, memory = {}, save = () => {}, onAction, onReady}) {
   const canvas = el('canvas', {class: 'bench-canvas', width: 720, height: 540, tabindex: 0, role: 'img'});
   const status = el('p', {class: 'signal-status', role: 'status'});
   const controls = el('div', {class: 'bench-controls'});
   const top = el('div', {class: 'bench-top'});
-  const node = el('div', {class: 'signal-device bench'}, top, canvas, controls, status);
+  const reference = el('figure', {class: 'bench-reference', hidden: true});
+  const workFigure = el('figure', {class: 'bench-work-figure'}, el('figcaption', {}, mode === 'test' ? '내 작업대' : '손전등 작업대'), canvas);
+  const scenes = el('div', {class: 'bench-scenes'}, reference, workFigure);
+  const node = el('div', {class: 'signal-device bench'}, top, scenes, controls, status);
   const c = canvas.getContext('2d');
   let alive = true, raf = 0, gloves = mode !== 'test', card = null, heatUntil = 0;
   const tested = new Set(memory.tested || []);
@@ -153,6 +156,19 @@ export function circuitBench({el, button, mode, memory = {}, onAction, onReady})
   const links = () => wires.filter(([a, b]) => a !== 'none' && b !== 'none').map(([a, b]) => [a, b]);
   const lit = () => (mode === 'test' ? !!card && card.shown && card.result : isLit({links: links(), broken, switchOpen: mode === 'flashlight' && !swOn}));
   function say(t) { status.textContent = t; }
+
+  function renderReference() {
+    const show = mode === 'test' && card && card.n !== 2;
+    reference.hidden = !show;
+    scenes.classList.toggle('comparing', !!show);
+    reference.replaceChildren();
+    if (!show) return;
+    const spec = CARDS[card.n];
+    // 비교할 연결만 보여 준다. 켜짐/꺼짐은 학생이 직접 확인한 뒤 작업대에 나타난다.
+    reference.append(el('figcaption', {}, `따라 연결할 카드 ${card.n}`),
+      circuitCanvas(el, {...spec, labels: true}, 'circuit-fig bench-target', `카드 ${card.n}. ${describe(spec)}`),
+      el('p', {class: 'bench-reference-note'}, '전선 끝이 닿은 곳을 비교해요. 연결되지 않은 전선은 「떼기」를 골라요.'));
+  }
 
   function renderTop() {
     top.replaceChildren();
@@ -175,19 +191,19 @@ export function circuitBench({el, button, mode, memory = {}, onAction, onReady})
       card = {n, shown: false};
       heatUntil = performance.now() + 2600;
       say('카드 2는 전지의 두 극을 전선으로 바로 이은 합선 회로예요. 전지가 뜨거워져 위험해서 직접 만들지 않아요. 모형으로만 잠깐 보여 주고 바로 끊을게요.');
-      tested.add(2); memory.tested = [...tested]; renderTop(); renderControls(); return;
+      tested.add(2); memory.tested = [...tested]; save(); renderReference(); renderTop(); renderControls(); return;
     }
     card = {n, shown: false, result: isLit(spec)};
     wires = [['+', 'none'], ['-', 'none']]; broken = !!spec.broken;
     say(`카드 ${n}처럼 전선을 이어 보세요.${broken ? ' 이 카드의 전구는 필라멘트가 끊긴 전구예요.' : ''}`);
-    renderTop(); renderControls();
+    renderReference(); renderTop(); renderControls();
   }
   function wireRow(i, name) {
     const [a, b] = wires[i];
-    const seg = (list, cur, set) => el('span', {class: 'bench-seg'}, list.map(([id, label]) => { const x = button(label, () => { set(id); if (card) card.shown = false; afterChange(); }, 'bench-opt'); x.setAttribute('aria-pressed', String(cur === id)); return x; }));
+    const seg = (list, cur, set, end) => el('span', {class: 'bench-seg'}, list.map(([id, label]) => { const x = button(label, () => { set(id); if (card) card.shown = false; afterChange(); }, 'bench-opt'); x.setAttribute('aria-pressed', String(cur === id)); x.dataset.wireFocus = `${i}-${end}-${id}`; return x; }));
     return el('div', {class: 'bench-wire'}, el('b', {class: 'bench-wire-name w' + i}, name),
-      el('span', {class: 'bench-lab'}, '전지 쪽'), seg([['+', '+극'], ['-', '−극'], ['none', '떼기']], a, (v) => { wires[i][0] = v; }),
-      el('span', {class: 'bench-lab'}, '전구 쪽'), seg(BULB_ENDS.map((x) => [x.id, x.label]), b, (v) => { wires[i][1] = v; }));
+      el('span', {class: 'bench-lab'}, '전지 쪽'), seg([['+', '+극'], ['-', '−극'], ['none', '떼기']], a, (v) => { wires[i][0] = v; }, 'battery'),
+      el('span', {class: 'bench-lab'}, '전구 쪽'), seg(BULB_ENDS.map((x) => [x.id, x.label]), b, (v) => { wires[i][1] = v; }, 'bulb'));
   }
   function renderControls() {
     controls.replaceChildren();
@@ -202,7 +218,7 @@ export function circuitBench({el, button, mode, memory = {}, onAction, onReady})
     const spec = CARDS[card.n];
     if (!same(links(), spec.links)) { card.shown = false; say(`아직 카드 ${card.n}과 연결이 달라요. 카드 그림에서 전선이 전지와 전구의 어디에 닿는지 다시 보세요.`); return; }
     card.shown = true;
-    tested.add(card.n); memory.tested = [...tested];
+    tested.add(card.n); memory.tested = [...tested]; save();
     const pred = memory.predict?.['c' + card.n];
     const result = card.result ? '켜짐' : '꺼짐';
     const predText = pred ? ` 내 예상은 "${pred === 'on' ? '켜짐' : '꺼짐'}"이었어요.${(pred === 'on') === card.result ? ' 예상과 같아요.' : (spec.broken ? ' 예상과 달랐네요. 전구 속 필라멘트를 살펴보세요.' : ' 예상과 달랐네요. 전선이 전구의 어디에 닿았는지 살펴보세요.')}` : '';
@@ -211,7 +227,9 @@ export function circuitBench({el, button, mode, memory = {}, onAction, onReady})
     if (REQUIRED.every((n) => tested.has(n))) onAction?.('compared');
   }
   function afterChange() {
+    const focused = controls.contains(document.activeElement) ? document.activeElement.dataset.wireFocus : null;
     renderControls();
+    if (focused) [...controls.querySelectorAll('[data-wire-focus]')].find((b) => b.dataset.wireFocus === focused)?.focus({preventScroll: true});
     if (mode === 'fix') {
       // 손전등 하나는 한 번만 센다. 다음 손전등이 나올 때까지 조작 단추를 잠가 같은 손전등을 여러 번 세지 않게 한다.
       if (lit() && counted !== pz) {

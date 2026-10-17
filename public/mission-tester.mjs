@@ -85,7 +85,7 @@ export function paintKit(c, s = {}, now = 0) {
     // 마지막 전선의 집게: 고무 부분 또는 금속 부분
     c.strokeStyle = '#3f9a36'; c.lineWidth = 2.6; c.beginPath(); c.moveTo(T.D.x, T.D.y); c.quadraticCurveTo(170, 20, clipOn === 'metal' ? T.B.x + 2 : 66, clipOn === 'metal' ? T.B.y : 92); c.stroke();
     c.fillStyle = '#39424e'; c.fillRect(40, 88, 40, 7); c.fillStyle = '#c9ced6'; c.fillRect(80, 89, 6, 5);
-    c.fillStyle = '#26292e'; c.font = '10px "Malgun Gothic",sans-serif'; c.textAlign = 'center'; c.fillText('전선의 고무 덮개', 58, 80);
+    c.fillStyle = '#26292e'; c.font = '10px "Malgun Gothic",sans-serif'; c.textAlign = 'center'; c.fillText('전선의 고무 덮개', 58, 62); // 「전구 끼우개」 글씨와 겹치지 않게 위로
     c.fillStyle = '#c0392b'; const [x, y] = clipOn === 'metal' ? [T.B.x + 2, T.B.y] : [66, 92]; c.fillRect(x - 5, y - 4, 10, 8);
   }
   if (sel) { const t = T[sel]; c.strokeStyle = '#ffd35a'; c.lineWidth = 2; c.beginPath(); c.arc(t.x, t.y, 7, 0, Math.PI * 2); c.stroke(); }

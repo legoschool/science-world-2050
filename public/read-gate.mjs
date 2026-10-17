@@ -1,6 +1,6 @@
-// 대사를 읽을 시간을 지킨다. 줄이 다 보인 뒤 READ_MS 동안은 넘기는 단추가 눌리지 않고, 단추 안에 남은 초(2, 1)가 보이며 아래 막대가 차오른다.
+// 글자가 나타나는 동안만 필요한 대기를 전달받는다. 다 읽은 뒤의 강제 대기는 두지 않는다.
 // 잠금이 풀리면 첫 단추에 초점을 돌려주어 Enter나 스페이스로 바로 넘길 수 있다.
-export const READ_MS = 2000;
+export const READ_MS = 0;
 
 export function holdButtons(buttons, ms = READ_MS) {
   const list = [...buttons].filter((b) => b && !b.disabled);
@@ -35,8 +35,8 @@ export function holdButtons(buttons, ms = READ_MS) {
     if (first && free) first.focus({preventScroll: true});
   }
   if (list.length && ms > 0) lock(ms);
-  // restart: 글자가 다 나오기 전에 화면을 눌러 줄을 다 보였을 때, 그때부터 다시 READ_MS를 센다
-  return {release, restart: (wait = READ_MS) => { if (timer) lock(wait); }};
+  // 글을 한 번에 보이면 타이핑 대기를 즉시 끝낸다.
+  return {release, restart: (wait = READ_MS) => { if (timer) { if (wait > 0) lock(wait); else release(); } }};
 }
 
 // 글자가 한 자씩 나오는 데 걸리는 시간(두 자씩 22 ms마다)

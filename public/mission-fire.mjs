@@ -65,7 +65,7 @@ export function candleBench({el, button, mode, task = {}, memory = {}, onAction:
       if (!safe.paper) { c.fillStyle = '#ddd'; c.fillRect(90, 250, 130, 44); c.fillStyle = '#999'; for (let i = 0; i < 6; i++) c.fillRect(100, 258 + i * 6, 110, 2); }
       if (!safe.board) { c.fillStyle = '#8b6b4a'; c.fillRect(240, 262, 100, 30); }
       c.fillStyle = '#233a5c'; c.font = FONT(14, true); c.textAlign = 'center';
-      items.forEach(([k, n, ok, x]) => { c.fillStyle = ok ? '#2f9a4f' : '#b4531a'; c.fillText(`${n} ${ok ? '완료' : '확인 필요'}`, x, 330); });
+      items.forEach(([k, n, ok, x]) => { c.fillStyle = ok ? '#2f9a4f' : '#b4531a'; c.fillText(n, x, 322); c.fillText(ok ? '완료' : '확인 필요', x, 342); }); // 이름과 상태를 두 줄로 써서 이웃 글씨와 겹치지 않게
       c.fillStyle = '#c0392b'; c.fillRect(620, 220, 40, 60); c.fillStyle = safe.lock ? '#2f9a4f' : '#f0b43c'; c.fillRect(628, 206, 24, 14);
       raf = requestAnimationFrame(draw); return;
     }
@@ -162,12 +162,12 @@ export function grainLab({el, button, mode, task = {}, memory = {}, onAction: fi
       c.save(); c.beginPath(); c.arc(lens.x, lens.y, 70, 0, Math.PI * 2); c.clip(); c.fillStyle = '#fff'; c.fillRect(lens.x - 70, lens.y - 70, 140, 140);
       c.translate(lens.x, lens.y); c.scale(3, 3); c.translate(-lens.x, -lens.y);
       for (const g of grains) if (!found.salt.includes(g.id) && !found.sugar.includes(g.id) && Math.hypot(g.x - lens.x, g.y - lens.y) < 30) paintGrain(c, g);
-      c.restore(); c.strokeStyle = '#c9a86a'; c.lineWidth = 6; c.beginPath(); c.arc(lens.x, lens.y, 70, 0, Math.PI * 2); c.stroke();
+      c.restore(); c.strokeStyle = '#c9a86a'; c.lineWidth = 6; c.beginPath(); c.arc(lens.x, lens.y, 70, 0, Math.PI * 2); c.stroke(); c.strokeStyle = 'rgba(200,60,40,.8)'; c.lineWidth = 2; c.beginPath(); c.moveTo(lens.x - 10, lens.y); c.lineTo(lens.x + 10, lens.y); c.moveTo(lens.x, lens.y - 10); c.lineTo(lens.x, lens.y + 10); c.stroke(); // 가운데 표시: 이 자리의 알갱이가 담긴다
       c.strokeStyle = '#c9a86a'; c.lineWidth = 10; c.beginPath(); c.moveTo(lens.x + 50, lens.y + 50); c.lineTo(lens.x + 95, lens.y + 95); c.stroke();
     }
     raf = requestAnimationFrame(draw);
   }
-  function nearest(x, y) { let best = null, bd = 1e9; for (const g of grains) { if (found.salt.includes(g.id) || found.sugar.includes(g.id)) continue; const dd = Math.hypot(g.x - x, g.y - y); if (dd < bd) { bd = dd; best = g; } } return bd < 12 ? best : null; }
+  function nearest(x, y, near = 12) { let best = null, bd = 1e9; for (const g of grains) { if (found.salt.includes(g.id) || found.sugar.includes(g.id)) continue; const dd = Math.hypot(g.x - x, g.y - y); if (dd < bd) { bd = dd; best = g; } } return bd < near ? best : null; }
   function take(g) {
     if (!g) { status.textContent = '돋보기 가운데에 알갱이를 두고 눌러 보세요.'; return; }
     if (g.kind !== into) { status.textContent = `그 알갱이는 ${NAME[into]} 같지 않아요. 색깔, 크기, 모양을 다시 보세요.`; return; }
@@ -193,7 +193,7 @@ export function grainLab({el, button, mode, task = {}, memory = {}, onAction: fi
       return;
     }
     tray.append(pick(el, button, [['salt', `${NAME.salt} 칸에 담기`], [other, `${NAME[other]} 칸에 담기`]], into, (id) => { into = id; renderTray(); }),
-      el('div', {class: 'bench-seg'}, button('돋보기 ←', () => { lens.x = Math.max(220, lens.x - 20); }, 'bench-opt'), button('돋보기 ↑', () => { lens.y = Math.max(50, lens.y - 20); }, 'bench-opt'), button('돋보기 ↓', () => { lens.y = Math.min(330, lens.y + 20); }, 'bench-opt'), button('돋보기 →', () => { lens.x = Math.min(500, lens.x + 20); }, 'bench-opt'), button('돋보기 가운데 알갱이 담기', () => take(nearest(lens.x, lens.y)), 'mission-go')));
+      el('div', {class: 'bench-seg'}, button('돋보기 ←', () => { lens.x = Math.max(220, lens.x - 20); }, 'bench-opt'), button('돋보기 ↑', () => { lens.y = Math.max(50, lens.y - 20); }, 'bench-opt'), button('돋보기 ↓', () => { lens.y = Math.min(330, lens.y + 20); }, 'bench-opt'), button('돋보기 →', () => { lens.x = Math.min(500, lens.x + 20); }, 'bench-opt'), button('돋보기 가운데 알갱이 담기', () => take(nearest(lens.x, lens.y, 26)), 'mission-go')));
   }
   // 소금은 found.salt, 다른 재료(갈색설탕이나 후추)는 found.sugar에 담는다.
   renderTray(); paintBins();
@@ -460,12 +460,13 @@ export function oxygenLab({el, button, mode, task = {}, memory = {}, onAction: f
   const e = memory.empty ??= {done: false};
   let hole = 0, alive = true, raf = 0, k = 0, run = false;
   const STEPS = ['유리판으로 집기병 입구 일부를 가리기', '산소 캔을 1초 누르기', '유리판으로 입구를 덮어 두기', '두 양초에 불 붙이기', '두 촛불을 크기가 같은 집기병으로 동시에 덮기'];
-  function jar(x, t, limit, big, label) {
-    const lit = t < limit, h = big ? 64 : 44;
+  // 불을 붙이기 전에는 불꽃이 없고, 집기병으로 덮기 전에는 두 촛불이 같은 크기다(실험 전에 결과를 보여 주지 않는다)
+  function jar(x, t, limit, big, label, burning = true, covered = true) {
+    const lit = burning && t < limit, h = big && covered ? 64 : 44;
     c.fillStyle = '#f5ecd8'; c.fillRect(x - 16, 240, 32, 60); c.fillStyle = '#3a2f22'; c.fillRect(x - 1.5, 230, 3, 10);
     if (lit) flame(c, x, 232, h * Math.max(0.35, 1 - t / limit * 0.6), {t: k});
-    c.strokeStyle = 'rgba(170,200,240,.95)'; c.lineWidth = 3; c.beginPath(); c.moveTo(x - 60, 300); c.lineTo(x - 60, 150); c.quadraticCurveTo(x - 60, 120, x - 30, 120); c.lineTo(x + 30, 120); c.quadraticCurveTo(x + 60, 120, x + 60, 150); c.lineTo(x + 60, 300); c.stroke();
-    c.fillStyle = '#233a5c'; c.font = FONT(14, true); c.textAlign = 'center'; c.fillText(label, x, 330); c.fillText(lit ? `불꽃 ${big ? '큼' : '보통'}` : `${limit}초에 꺼짐`, x, 352);
+    c.strokeStyle = covered ? 'rgba(170,200,240,.95)' : 'rgba(170,200,240,.35)'; c.lineWidth = 3; c.beginPath(); c.moveTo(x - 60, 300); c.lineTo(x - 60, 150); c.quadraticCurveTo(x - 60, 120, x - 30, 120); c.lineTo(x + 30, 120); c.quadraticCurveTo(x + 60, 120, x + 60, 150); c.lineTo(x + 60, 300); c.stroke();
+    c.fillStyle = '#233a5c'; c.font = FONT(14, true); c.textAlign = 'center'; c.fillText(label, x, 330); c.fillText(!burning ? '불 붙이기 전' : !covered ? '아직 덮기 전' : lit ? `불꽃 ${big ? '큼' : '보통'}` : `${limit}초에 꺼짐`, x, 352);
   }
   function draw() {
     if (!alive) return; k++;
@@ -486,7 +487,8 @@ export function oxygenLab({el, button, mode, task = {}, memory = {}, onAction: f
     }
     if (run) { o.t = Math.min(32, o.t + (reduceMotion() ? 32 : 0.12)); if (o.t >= 32) { run = false; o.done = true; status.textContent = '공기만 든 병의 촛불은 12초, 산소를 더 넣은 병의 촛불은 30초에 꺼졌어요. 산소를 더 넣은 병의 불꽃이 더 컸어요.'; renderTray(); onAction('timed'); onReady?.(); } }
     const covered = o.step >= 5 || o.done;
-    jar(230, covered ? o.t : 0, 12, false, '공기만 든 병'); jar(490, covered ? o.t : 0, 30, true, '공기에 산소를 더 넣은 병');
+    const burning = o.step >= 4 || o.done;
+    jar(230, covered ? o.t : 0, 12, false, '공기만 든 병', burning, covered); jar(490, covered ? o.t : 0, 30, true, '공기에 산소를 더 넣은 병', burning, covered);
     c.fillStyle = '#233a5c'; c.font = FONT(16, true); c.textAlign = 'left'; c.fillText(o.step < 5 && !o.done ? `지금 할 일: ${STEPS[o.step]}` : `초시계 ${Math.floor(o.t)}초`, 16, 28);
     raf = requestAnimationFrame(draw);
   }

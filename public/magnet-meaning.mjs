@@ -1,6 +1,9 @@
+import {electricitySupport,electricityTerms} from './electricity-support.mjs';
+import {magnetRecord} from './experiment-records.mjs';
 export function magnetMeaning(host,{el,button,state,record,save}){
 const q=state.magnetMeaning??={name:'',reason:'',hint:0};let feedback='';
 function render(){host.replaceChildren(el('h2',{},'공방에 남길 사용 안내'),el('p',{},'신항이: “스위치를 닫았을 때와 열었을 때 달랐지요. 이 장치를 무엇이라고 설명하면 좋을까요?”'));
+host.prepend(electricitySupport(el,'G06','meaning'));host.append(magnetRecord(el,state),electricityTerms(el,'G06','meaning'));
 const group=(label,key,options)=>{const box=el('fieldset',{class:'magnet-choices'},el('legend',{},label));for(const[value,title]of options){const input=el('input',{type:'radio',name:'magnet-'+key,value,'aria-label':title});input.checked=q[key]===value;input.onchange=()=>{q[key]=value;save()};box.append(el('label',{},input,title))}host.append(box)};
 group('장치의 이름과 성질','name',[['electromagnet','전기가 흐를 때 자석 성질이 나타나는 전자석'],['always','선만 감겨 있으면 언제나 붙는 자석'],['conductor','전기가 흐르는 모든 물체는 자석']]);
 group('필요할 때만 켜는 까닭','reason',[['heat','오래 켜 두면 전지와 전선이 뜨거워질 수 있기 때문에'],['strong','켜 둔 시간만큼 계속 더 세지기 때문에'],['empty','철이 모두 없어지기 때문에']]);

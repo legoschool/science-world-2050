@@ -1,3 +1,4 @@
+import {JOURNEY_REGIONS,selectedRegion,regionForQuest,rememberQuest,chooseRegion,openRegionChoice} from './region-journey.mjs';
 import {openTeaching} from './teaching-ui.mjs';
 import {paintTundraPortal} from './mission-tundra.mjs';
 // 탐험 지도: 중앙 광장(넓은 지도 + 이야기), 다섯 지구, 지구 안 구역.
@@ -275,7 +276,8 @@ function buildRegion(loc, key, links, isZone, ctx) {
 // ---------------------------------------------------------------- 탐험 화면
 const josa = (w, withB, noB) => { const code = w.charCodeAt(w.length - 1) - 0xac00; return w + (code >= 0 && code < 11172 && code % 28 ? withB : noB); };
 export function atlas(host, travel, opts) {
-  const {getTracked, save, enterGame, complete, logout, restart, navigate, runId, onHandoff, enterMotor, enterBuzzer, enterDeduction, enterApplication, enterInquiry, enterSummary, enterMagnet, enterCrane, enterMission, state = {}, nickname = '', editAvatar, api, record, me} = opts;
+  const {getTracked, save, enterGame, complete, logout, restart, navigate, runId, setPace, onHandoff, enterMotor, enterBuzzer, enterDeduction, enterApplication, enterInquiry, enterSummary, enterMagnet, enterCrane, enterMission, state = {}, nickname: initialNickname = '', editAvatar, editNickname, api, record, me} = opts;
+  let nickname=initialNickname;
   const loc = travel.map || 'hub';
   const regionKey = loc === 'hub' ? 'hub' : regions[loc] ? loc : Object.keys(regions).find((k) => regions[k].zones.some((z) => z.id === loc));
   const region = regions[regionKey], zone = region?.zones.find((z) => z.id === loc);
@@ -290,7 +292,7 @@ export function atlas(host, travel, opts) {
   const make = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
   const btn = (label, fn, cls = '') => { const b = make('button', cls, label); b.type = 'button'; b.onclick = fn; return b; };
   const root = make('section', 'atlas' + (loc === 'hub' ? ' atlas-hub' : '')), canvas = make('canvas');
-  canvas.width = VW; canvas.height = VH; canvas.tabIndex = 0; canvas.setAttribute('aria-label', title + ' 탐험 지도. 방향키로 걷고 E 키로 말을 걸거나 조사합니다.');
+  canvas.width = VW; canvas.height = VH; canvas.tabIndex = 0; canvas.setAttribute('aria-label', title + ' 탐험 지도. 방향키 또는 W A S D로 걷고 E 키로 말을 걸거나 조사합니다.');
   const locBadge = make('div', 'rpg-location', title);
   const speech = make('section', 'rpg-speech'); speech.hidden = true; speech.setAttribute('aria-live', 'polite');
   const mini = make('canvas', 'world-minimap'); mini.width = 180; mini.height = 120; mini.setAttribute('aria-label', '미니맵: 흰 점은 내 위치, 노란 점은 다음 목적지');
@@ -323,13 +325,13 @@ export function atlas(host, travel, opts) {
 
   const introDone = () => story.step === 'done';
   const questDone = (id) => progress.quests.some((q) => q.id === id && q.status === 'completed') || (id === 'R3-G04' && complete);
-  const pendingChapter = () => (loc === 'hub' && introDone() ? CHAPTERS.find((c) => questDone(c.quest) && !story.chapters[c.id] && npcs.some((n) => n.id === c.npc)) : null);
+  const pendingChapter = () => (loc === 'hub' && introDone() ? CHAPTERS.find((c) => regionForQuest(c.quest)===selectedRegion(adv) && questDone(c.quest) && !story.chapters[c.id] && npcs.some((n) => n.id === c.npc)) : null);
   const mentor = () => npcs.find((n) => n.id === 'mystery');
-  const afterMeet = () => (mentor() ? '미스터리 선생님께 가서 첫 의뢰를 받으세요' : '신항이에게 돌아가 첫 의뢰를 받으세요');
+  const afterMeet = () => (mentor() ? '미스터리 선생님께 가서 복구할 지역을 골라 보세요' : '신항이에게 돌아가 복구할 지역을 골라 보세요');
   const hasMap = () => story.map || introDone();
   const has = (id) => (adv.storyItems || []).includes(id);
   const missingParts = () => REPAIR.needs.filter((id) => !has(id));
-  const needParts = () => questDone('R3-G04') && !story.repaired;
+  const needParts = () => selectedRegion(adv)==='power' && questDone('R3-G04') && !story.repaired;
   function repairStatusLine() { const m = missingParts(); return m.length ? `안내판을 고치려면 ${josa(m.map((id) => STORY_ITEMS[id].title).join(', '), '이', '가')} 더 필요해요. ${REPAIR.where[m[0]]}` : '부품을 모두 모았어요. 이제 회로를 조립해 봐요.'; }
 
   function checkpoint() { travel.map = loc; travel.positions ??= {}; travel.positions[posKey] = {x: Math.round(x), y: Math.round(y)}; save(); }
@@ -337,8 +339,9 @@ export function atlas(host, travel, opts) {
 
   // ---------------------------------------------------------------- 말풍선
   let typing = null, hold = null;
-  function close() { clearInterval(typing); speech.hidden = true; speech.replaceChildren(); openField = null; if (!locked) canvas.focus({preventScroll: true}); }
+  function close() { clearInterval(typing); hold?.release(); hold = null; speech.hidden = true; speech.replaceChildren(); openField = null; if (!locked) canvas.focus({preventScroll: true}); }
   function speakerBox(who, text) {
+    hold?.release(); hold = null;
     speech.replaceChildren();
     const cut = cutinFor(who);
     if (cut) { const img = new Image(); img.className = 'speech-cutin'; img.alt = ''; img.src = cut; img.onerror = () => { img.remove(); if (who.avatar) { const p = getPortrait(who.avatar, 84); p.className = 'speech-portrait'; speech.prepend(p); } }; speech.append(img); }
@@ -350,9 +353,18 @@ export function atlas(host, travel, opts) {
     body.append(head, p);
     speech.append(body);
     clearInterval(typing);
+    let readAll = null;
+    const reveal = () => {
+      const focused = readAll && document.activeElement === readAll;
+      clearInterval(typing); p.textContent = text; readAll?.remove(); hold?.release();
+      if (focused) body.querySelector('.actions button:not(:disabled)')?.focus({preventScroll: true});
+    };
     if (reduceMotion) p.textContent = text;
-    else { let i = 0; typing = setInterval(() => { i += 2; p.textContent = text.slice(0, i); if (i >= text.length) clearInterval(typing); }, 22); p.dataset.full = text; }
-    speech.onclick = (e) => { if (e.target.tagName !== 'BUTTON') { const early = p.textContent.length < text.length; clearInterval(typing); p.textContent = text; if (early) hold?.restart(READ_MS); } };
+    else {
+      readAll = btn('글 바로 보기', reveal, 'secondary'); head.append(readAll);
+      let i = 0; typing = setInterval(() => { i += 2; p.textContent = text.slice(0, i); if (i >= text.length) reveal(); }, 22); p.dataset.full = text;
+    }
+    speech.onclick = (e) => { if (!e.target.closest('button')) reveal(); };
     body.readMs = typingMs(text, reduceMotion) + READ_MS;
     return body;
   }
@@ -366,10 +378,11 @@ export function atlas(host, travel, opts) {
       const body = speakerBox(who, lines[i]);
       const actions = make('div', 'actions');
       if (i < lines.length - 1) actions.append(btn('다음 ▶', () => { i++; show(); }));
-      else { options.forEach(([label, fn]) => actions.append(btn(label, fn))); if (options.some(([label]) => label.length > 24)) actions.classList.add('long'); }
+      else { options.forEach(([label, fn]) => actions.append(btn(label, fn, fn === close ? 'speech-dismiss' : ''))); if (options.some(([label]) => label.length > 24)) actions.classList.add('long'); }
       body.append(actions);
       actions.querySelector('button').focus();
-      hold = holdButtons(actions.querySelectorAll('button'), body.readMs);
+      hold = holdButtons(actions.querySelectorAll('button:not(.speech-dismiss)'), body.readMs);
+      if (actions.querySelector('button')?.disabled) body.querySelector('.speech-head button')?.focus({preventScroll: true});
       sfx('blip');
     };
     show();
@@ -384,6 +397,7 @@ export function atlas(host, travel, opts) {
     body.append(actions);
     actions.querySelector('button').focus();
     hold = holdButtons(actions.querySelectorAll('button'), body.readMs);
+    if (actions.querySelector('button')?.disabled) body.querySelector('.speech-head button')?.focus({preventScroll: true});
   });
   const wait = (ms) => new Promise((r) => setTimeout(r, cancelled || reduceMotion ? 0 : ms));
 
@@ -464,7 +478,7 @@ export function atlas(host, travel, opts) {
     await Promise.all(helpers.map((h, i) => walkNpc(h, spots[i].x, spots[i].y, 140)));
     helpers.forEach(faceTo);
     await line(d, '머리 위에 느낌표가 떠 있는 친구들에게 말을 걸어 보세요. 모두 탐구를 도와줄 거예요.');
-    if (mentor()) await line(d, '그리고 학교 앞에 미스터리 선생님이 계세요. 탐험가처럼 과거에서 오셨다는 소문이 있어요. 탐구대 의뢰는 선생님이 주세요.');
+    if (mentor()) await line(d, '그리고 학교 앞에 미스터리 선생님이 계세요. 탐험가처럼 과거에서 오셨다는 소문이 있어요. 선생님과 이야기를 나누고 어느 지역부터 도울지 직접 골라 봐요.');
     if (cancelled) return;
     helpers.forEach((h, i) => { h.hidden = false; h.x = spots[i].x; h.y = spots[i].y; h.walk = null; });
     if (dodam) { dodam.hidden = false; dodam.x = 1010; dodam.y = 800; dodam.walk = null; }
@@ -487,32 +501,45 @@ export function atlas(host, travel, opts) {
       markObjective();
     }]]);
   }
-  function finishIntro() {
+  let regionChoice=null;
+  // 지도 자료(의뢰 목록)를 받기 전에 지역 고르기를 열면 모든 지역이 「불러오지 못했어요」로 비어 보였다. 받은 뒤에 연다.
+  let markLoaded=null;const loaded=new Promise((r)=>{markLoaded=r;});
+  function chooseJourney(first=false){
+    if(!progress.quests.length){setHint('지역 정보를 불러오고 있어요. 잠시만 기다려 주세요.');loaded.then(()=>{if(!alive)return;if(progress.quests.length)chooseJourney(first);else talk('길 안내','지역 정보를 불러오지 못했어요. 연결을 확인하고 광장 게시판에서 다시 골라 주세요.');});return;}
+    close();keys.clear();path=[];pending=null;
+    regionChoice=openRegionChoice({adventure:adv,quests:progress.quests,first,onClose:()=>{regionChoice=null;if(alive)canvas.focus({preventScroll:true});},onSelect:key=>{
+      const q=chooseRegion(adv,key,progress.quests);if(!q)return;
+      if(first||!introDone())finishIntro(key);else{checkpoint();window.dispatchEvent(new Event('adventure-tracked'));markObjective();}
+      const r=JOURNEY_REGIONS.find(r=>r.key===key),info=MISSIONS[q.id]||QUESTS[q.id];
+      say(mentor()||npcById('dodam')||{name:'길 안내'},[r.problem,'내가 고른 의뢰: '+q.title,...(info?.goal?['이번 의뢰에서 알아볼 것: '+info.goal]:[]),'노란 목적지 표식을 따라 이 지역으로 가요. 다른 지역은 언제든 다시 고를 수 있어요.'],[['목적지까지 걸어가기',()=>{close();routeObjective();}],['광장 더 둘러보기',close]]);
+    }});
+  }
+  function finishIntro(key) {
     for (const k of ['comji', 'dalsae', 'elm']) { story.met[k] = true; giveItem(HELPER_ITEM[k]); }
-    story.map = true; story.step = 'done';
-    const isNew = !adv.welcomed; adv.welcomed = true; if (isNew || !adv.tracked) adv.tracked = firstQuest().id;
+    story.map = true;
+    if(!key&&!adv.selectedRegion){story.step='meet';skip.hidden=true;setHint('복구할 지역을 골라 첫 의뢰를 받아 보세요');checkpoint();chooseJourney(true);return;}
+    story.step = 'done';adv.welcomed = true;
     skip.hidden = true; mini.classList.add('reveal');
     setHint('');
     checkpoint();
     window.dispatchEvent(new Event('adventure-tracked'));
     markObjective();
   }
-  function skipStory() {
+  function skipStory(choose=false) {
     cancelled = true;
     const dodam = npcById('dodam');
     for (const n of npcs) { if (n.walk) { n.x = n.walk.tx; n.y = n.walk.ty; const r = n.walk.resolve; n.walk = null; r(); } n.hidden = false; n.x = n.home.x; n.y = n.home.y; }
     if (dodam) { dodam.x = 1010; dodam.y = 800; }
     signState = ctxSignOn ? 'on' : 'off'; flash = 0;
-    close(); locked = false; finishIntro();
-    banner(firstQuest().name, '첫 의뢰');
+    close(); locked = false;if(choose)chooseJourney(true);else finishIntro();
     canvas.focus({preventScroll: true});
   }
   function dodamTalk(n) {
     faceTo(n);
     if (story.step === 'meet') {
       if (metCount() < 3) return say(n, [`아직 만나지 못한 친구가 있어요. 느낌표가 떠 있는 친구에게 말을 걸어 보세요. (${metCount()}/3)`]);
-      if (mentor()) return say(n, ['모두 만났군요. 이제 미스터리 선생님께 가요.', '탐구대 의뢰는 선생님이 정해 주세요. 학교 앞에 계세요.'], [['선생님께 가기', () => { close(); walk(npcTarget(mentor())); }], ['조금 더 둘러보기', close]]);
-      return say(n, ['모두 만났군요. 이제 진짜 첫 의뢰예요.', ...firstQuest().go, '노란 표식을 따라가면 돼요. 거기서 다시 만나요.'], [['첫 의뢰 받기', () => { close(); finishIntro(); banner(firstQuest().name, '첫 의뢰'); }]]);
+      if (mentor()) return say(n, ['모두 만났군요. 이제 미스터리 선생님께 가요.', '학교 앞 선생님과 이야기를 나누고 어느 지역부터 도울지 골라 봐요.'], [['선생님께 가기', () => { close(); walk(npcTarget(mentor())); }], ['조금 더 둘러보기', close]]);
+      return say(n,['모두 만났군요. 지역마다 도움이 필요한 주민이 있어요. 어느 지역부터 도울지 골라 봐요.'],[['복구할 지역 고르기',()=>finishIntro()]]);
     }
     const ch = pendingChapter();
     if (ch && ch.npc === n.id) return chapterTalk(n, ch);
@@ -528,20 +555,19 @@ export function atlas(host, travel, opts) {
     if (ch && ch.npc === n.id) return chapterTalk(n, ch);
     if (loc === 'hub' && !introDone()) {
       if (story.step !== 'meet' || metCount() < 3) return say(n, [`어서 와요. 먼저 광장의 컴지, 달새, 엘엠과 인사하고 오세요. (${metCount()}/3)`]);
-      const fq = firstQuest(), q = fq.info;
-      return say(n, ['어서 와요. 그 돋보기를 들여다본 탐험가군요. 저는 미스터리 선생님이에요.', '이 세상을 고칠 수 있는 건 직접 관찰하고 확인하는 사람뿐이에요. 네 지구를 하나씩 되살리다 보면 돌아갈 길도 찾을 수 있을 거예요.', `첫 의뢰는 "${fq.name}"이에요. ${fq.story}`, '이번 의뢰에서 배울 것: ' + q.goal, `할 일은 모두 ${q.steps.length}단계예요. 첫 단계는 "${q.steps[0]}". 단계마다 퀘스트 수첩에 체크가 되니 확인해 보세요.`, '막히면 컴지, 달새, 엘엠에게 물어보세요. 도움을 받아도 감점은 없어요. 자, 동쪽 문으로 출발.'], [['첫 의뢰 받기', () => { close(); finishIntro(); banner(fq.name, '첫 의뢰'); }]]);
+      return say(n,['어서 와요. 저는 미스터리 선생님이에요. 이 세상에는 관찰하고 확인하며 고칠 문제가 많아요.','계절이 뒤섞인 농장, 불이 번지는 시장, 멈춘 전력망, 척척의 답을 확인하는 연구 본부에서 도움이 필요해요.','어느 지역부터 도울지 직접 골라 보세요. 먼저 다른 지역을 마쳐야 하는 것은 아니에요.','선택한 의뢰의 목표와 단계는 퀘스트 수첩에서 볼 수 있어요. 도움을 받아도 감점은 없어요.'],[['복구할 지역 고르기',()=>{close();finishIntro();}]]);
     }
     const id = getTracked?.() || 'R3-G04', q = QUESTS[id] || MISSIONS[id];
     if (!q) return say(n, n.lines);
     const s = questSteps(id, state, {}), i = s.indexOf(false), known = id === 'R3-G04' || id === 'R3-G07' || !!MISSIONS[id];
     const next = !known ? '다음 단계는 퀘스트 수첩에서 확인해 보세요. 끝낸 단계에는 체크가 되어 있어요.' : i >= 0 ? `지금 할 단계는 ${i + 1}번, "${q.steps[i]}"이에요.` : '이 의뢰의 단계는 모두 끝냈군요. 정말 잘했어요.';
-    say(n, ['지금 의뢰에서 배울 것: ' + q.goal, next, n.lines[1] || ''], [['목적지까지 걸어가기', () => { close(); routeObjective(); }], ['퀘스트 수첩 보기', () => { close(); document.querySelector('.adventure-bar .hud-quests')?.click(); }], ['알겠어요', close]]);
+    say(n, ['지금 의뢰에서 배울 것: ' + q.goal, next, n.lines[1] || ''], [['목적지까지 걸어가기', () => { close(); routeObjective(); }], ['퀘스트 수첩 보기', () => { close(); document.querySelector('.adventure-bar .hud-quests')?.click(); }], ['다른 지역 고르기',()=>chooseJourney()], ['알겠어요', close]]);
   }
   function chapterTalk(n, ch) {
     faceTo(n);
     say(n, ch.lines, [['알겠어요.', () => {
       story.chapters[ch.id] = true;
-      if ((getTracked?.() || 'R3-G04') === ch.from) { adv.tracked = ch.to; window.dispatchEvent(new Event('adventure-tracked')); }
+      if ((getTracked?.() || 'R3-G04') === ch.from) { rememberQuest(adv,ch.to); window.dispatchEvent(new Event('adventure-tracked')); }
       checkpoint(); close(); markObjective();
     }]]);
   }
@@ -558,7 +584,7 @@ export function atlas(host, travel, opts) {
     story.chapters.repair = true;
     giveItem(STORY_ITEMS['sign-badge']);
     signState = 'on';
-    if ((getTracked?.() || 'R3-G04') === 'R3-G04') { adv.tracked = 'R3-G05'; window.dispatchEvent(new Event('adventure-tracked')); }
+    if ((getTracked?.() || 'R3-G04') === 'R3-G04') { rememberQuest(adv,'R3-G05'); window.dispatchEvent(new Event('adventure-tracked')); }
     checkpoint();
     banner('광장 안내판 복구', '문제 해결');
     const d = npcById('dodam') || {name: '신항이'};
@@ -597,7 +623,11 @@ export function atlas(host, travel, opts) {
   // 답은 같은 진단 과제의 기록(mission.answered)으로 남고 퀘스트 수첩 「내 배움 지도」에 처음 생각과 나란히 보인다.
   let thinking = false;
   // 의뢰 마무리 앞의 새 조건 문제를 「나중에 다시 해 볼게요」로 넘긴 의뢰(지금 회차). 달새가 광장에서 다시 권한다.
-  const laterTransfer = () => Object.entries(state.missions || {}).find(([, ms]) => ms && ms.run === state.runId && ms.completed && ms.poe?.T?.done && !ms.poe.T.ok)?.[0];
+  const laterTransfer = () => Object.entries(state.missions || {}).find(([id, ms]) => ms && ms.run === state.runId && ms.completed && ms.poe?.T?.done && !ms.poe.T.ok && !deferred('T:' + id))?.[0];
+  // 「다음에 할게요」를 고르면 그날은 같은 질문을 다시 꺼내지 않는다(말을 걸 때마다 같은 질문이 처음부터 나오지 않게). 다음 날 다시 권한다.
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+  const deferred = (k) => state.adventure?.thinkLater?.[k] === today();
+  const defer = (k) => { const a = (state.adventure ??= {}); a.thinkLater = {...(a.thinkLater || {}), [k]: today()}; thinkPending = false; save?.(); };
   async function dalsaeThink(n) {
     if (thinking) return;
     thinking = true;
@@ -605,12 +635,12 @@ export function atlas(host, travel, opts) {
     try { d = await api('my-learning'); } catch { d = null; }
     thinking = false;
     if (!alive) return;
-    const r = d?.rethink?.find((x) => x.done && x.parts.every((p) => p.now == null)), later = laterTransfer();
+    const r = d?.rethink?.find((x) => x.done && x.parts.every((p) => p.now == null) && !deferred(x.id)), later = laterTransfer();
     thinkPending = !!r || !!later;
     if (!r && later) return say(n, [`${MISSIONS[later]?.title || '지난'} 의뢰를 마칠 때 새 조건 문제를 다음에 풀기로 했지요. 지금 다시 풀어 볼래요?`],
-      [['새 조건 문제 풀기', () => { close(); state.missions[later].poe.T.again = true; save(); enterMission(later); }], ['다음에 할게요', close]]);
+      [['새 조건 문제 풀기', () => { close(); state.missions[later].poe.T.again = true; save(); enterMission(later); }], ['다음에 할게요', () => { defer('T:' + later); close(); }]]);
     if (!r) return talkNpc(n, true);
-    say(n, [`${r.gameTitle} 의뢰를 시작할 때 처음 생각을 적어 두었지요. 의뢰를 끝낸 지금은 어떻게 생각하는지 다시 들려줄래요?`], [['다시 답해 보기', () => askThink(n, r)], ['다음에 할게요', close]]);
+    say(n, [`${r.gameTitle} 의뢰를 시작할 때 처음 생각을 적어 두었지요. 의뢰를 끝낸 지금은 어떻게 생각하는지 다시 들려줄래요?` + (r.parts.length > 1 ? ` 질문은 ${r.parts.length}개예요.` : '')], [['다시 답해 보기', () => askThink(n, r)], ['다음에 할게요', () => { defer(r.id); close(); }]]);
   }
   function askThink(n, r) {
     const pick = {};
@@ -844,29 +874,41 @@ ${p.prompt}`;
       return say({name: '과학 안내판'}, [`[${zone.title} 의뢰]\n` + (rows.length ? rows.join('\n') : '이 구역의 의뢰를 불러오는 중이에요.'), now, field].filter(Boolean));
     }
     const rows = region.zones.map((z) => { const ids = z.games.map((g) => g.id), d = progress.quests.filter((q) => ids.includes(q.id) && q.status === 'completed').length; return `${z.title}: 의뢰 ${d}/${ids.length} 해결`; });
-    say({name: '과학 안내판'}, [`[${region.title} 구역 안내]\n` + rows.join('\n'), '구역마다 마을 주민이 맡기는 현장 활동이 있어요. 머리 위에 느낌표가 뜬 주민에게 말을 걸어 봐요.']);
+    const storyOptions = regionStories().length ? [['이 지역 이야기 다시 보기', chooseRegionStory], ['계속 걷기', close]] : undefined;
+    say({name: '과학 안내판'}, [`[${region.title} 구역 안내]\n` + rows.join('\n'), '구역마다 마을 주민이 맡기는 현장 활동이 있어요. 머리 위에 느낌표가 뜬 주민에게 말을 걸어 봐요.'], storyOptions);
+  }
+  const REGION_SCENE_LABELS = {intro: '처음 도착했을 때', middle: '의뢰를 절반쯤 해결했을 때', outro: '모든 의뢰를 해결했을 때'};
+  function regionStories() {
+    const R = REGION_CODE[regionKey];
+    return Object.keys(REGION_SCENE_LABELS).filter((stage) => adv.scenes?.includes(`${R}-${stage}`) && extra?.story?.[R]?.[stage]?.length);
+  }
+  function chooseRegionStory() {
+    say({name: '과학 안내판'}, ['다시 살펴볼 이야기를 골라 보세요.'], [...regionStories().map((stage) => [REGION_SCENE_LABELS[stage], () => playRegionScene(stage)]), ['계속 걷기', close]]);
   }
   // 지역 이야기: 지구 지도에 들어올 때 처음, 의뢰 절반, 모두 해결한 뒤에 한 번씩 보여 준다
-  function playRegionScene() {
+  function playRegionScene(replay = '') {
     const R = REGION_CODE[regionKey], st = extra?.story?.[R];
     if (!st || !introDone()) return;
     adv.scenes ??= [];
     const qs = progress.quests.filter((q) => q.id.startsWith(R + '-')), done = qs.filter((q) => q.status === 'completed').length;
     const seen = (k) => adv.scenes.includes(`${R}-${k}`);
-    const stage = qs.length && done === qs.length && !seen('outro') ? 'outro' : qs.length && done * 2 >= qs.length && !seen('middle') ? 'middle' : !seen('intro') ? 'intro' : null;
+    if (replay && !regionStories().includes(replay)) return;
+    const stage = replay || (qs.length && done === qs.length && !seen('outro') ? 'outro' : qs.length && done * 2 >= qs.length && !seen('middle') ? 'middle' : !seen('intro') ? 'intro' : null);
     if (!stage || !st[stage]?.length) return;
     const order = ['intro', 'middle', 'outro'];
-    adv.scenes = [...new Set([...adv.scenes, ...order.slice(0, order.indexOf(stage) + 1).map((k) => `${R}-${k}`)])];
-    checkpoint();
+    if (!replay) {
+      adv.scenes = [...new Set([...adv.scenes, ...order.slice(0, order.indexOf(stage) + 1).map((k) => `${R}-${k}`)])];
+      checkpoint();
+    }
     const who = (name) => (name === '이야기' ? NARRATOR : npcs.find((n) => n.name === name) || {name});
     const lines = st[stage];
-    const step = (i) => { const [name, text] = lines[i], last = i === lines.length - 1; say(who(name), [text], last ? [['계속 걷기', close]] : [['다음 ▶', () => step(i + 1)], ...(i === 0 ? [['이야기 건너뛰기', close]] : [])]); };
+    const step = (i) => { const [name, text] = lines[i], last = i === lines.length - 1; say(who(name), [text], last ? [['계속 걷기', close]] : [['다음 ▶', () => step(i + 1)], ['이야기 건너뛰기', close]]); };
     banner(region.title, {intro: '지역 이야기', middle: '이야기 중반', outro: '지역 복구'}[stage]);
     step(0);
   }
 
   // ---------------------------------------------------------------- 장소 조사
-  function move(map) { checkpoint(); travel.map = map; save(); dispose(); navigate(); }
+  function move(map) { checkpoint(); if(regions[map])chooseRegion(adv,map,progress.quests); travel.map = map; save(); dispose(); navigate(); }
   function inspect(t) {
     if (locked) return;
     if (t.healthPortal) { close(); keys.clear(); path = []; pending = null; checkpoint(); dispose(); return enterMission?.('R5-G10'); }
@@ -888,7 +930,7 @@ ${p.prompt}`;
       return say({name: '광장 안내판'}, [repairStatusLine()], [['회로 조립하기', () => { close(); startRepair(); }], ['나중에 하기', close]]);
     }
     if (t.school) return talk(NARRATOR, '우리가 다니는 학교다. 과학실 창문에 불이 켜져 있다.');
-    if (t.hq) return talk({name: '탐구대 본부'}, '탐구대원들이 모이는 곳이다. 거울 앞에서 내 모습을 다시 꾸밀 수 있다.', [...(editAvatar ? [['내 모습 바꾸기', () => { close(); checkpoint(); dispose(); editAvatar(); }]] : []), ['나가기', close]]);
+    if (t.hq) return talk({name: '탐구대 본부'}, '탐구대원들이 모이는 곳이다. 거울 앞에서 내 모습을 다시 꾸밀 수 있다.', [...(editNickname?[['닉네임 바꾸기',()=>{close();checkpoint();editNickname();}]]:[]),...(editAvatar ? [['내 모습 바꾸기', () => { close(); checkpoint(); dispose(); editAvatar(); }]] : []), ['나가기', close]]);
     if (t.board) return showBoard();
     if (t.placement) { keys.clear(); path = []; pending = null; checkpoint(); return openResources({resourceIds: t.resourceIds}); }
     if (t.map) return talk(t.back ? '길 안내' : t.title, t.back ? '왔던 길을 따라 돌아간다.' : t.title + ' 쪽으로 길이 이어져 있다.', [[t.label || '이 길로 가기', () => move(t.map)], ['둘러보기', close]]);
@@ -909,7 +951,7 @@ ${p.prompt}`;
         if (!alive) return;
         if (!handoff) return talk('항구 정비소', '관리실의 질문이 아직 도착하지 않았어요. 기록이 전달된 뒤 다시 살펴봐요.');
         const question = handoff.question;
-        talk('항구 정비소', `관리실에서 가져온 내 질문: “${question}”\n전구 대신 전동기나 버저를 연결하면 무엇을 비교할 수 있을까요?`, [[handoff.received ? '가져온 질문 다시 확인' : '이 질문으로 조사 이어가기', () => { if (!handoff.received) { onHandoff(question); handoff.received = true; } talk('조사 노트', `내 질문: “${question}”\n같은 전구의 밝기 비교 기록을 챙겼다. 이제 같은 전동기의 빠르기와 같은 버저의 소리 크기도 살펴봐요.`); }], ['정비소 기록 마무리', () => { checkpoint(); dispose(); enterSummary(); }], ['새 조사 시작하기', () => { checkpoint(); dispose(); enterInquiry(); }], ['주민의 의뢰 살펴보기', () => { checkpoint(); dispose(); enterApplication(); }], ['가린 장치 조사하기', () => { checkpoint(); dispose(); enterDeduction(); }], ['버저 작업대로', () => { checkpoint(); dispose(); enterBuzzer(); }], ['전동기 작업대로', () => { checkpoint(); dispose(); enterMotor(); }], ['계속 둘러보기', close]]);
+        talk('항구 정비소', `관리실에서 가져온 내 질문: “${question}”\n전구 대신 전동기나 버저를 연결하면 무엇을 비교할 수 있을까요?`, [[handoff.received ? '가져온 질문 다시 확인' : '이 질문으로 조사 이어가기', () => { if (!handoff.received) { onHandoff(question); handoff.received = true; } talk('조사 노트', `내 질문: “${question}”\n같은 전구의 밝기 비교 기록을 챙겼다. 이제 같은 전동기의 빠르기와 같은 버저의 소리 크기도 살펴봐요.`); }], ['새 조사 시작하기', () => { checkpoint(); dispose(); enterInquiry(); }], ['전동기 작업대로', () => { checkpoint(); dispose(); enterMotor(); }], ['버저 작업대로', () => { checkpoint(); dispose(); enterBuzzer(); }], ['가린 장치 조사하기', () => { checkpoint(); dispose(); enterDeduction(); }], ['주민의 의뢰 살펴보기', () => { checkpoint(); dispose(); enterApplication(); }], ['정비소 기록 마무리', () => { checkpoint(); dispose(); enterSummary(); }], ['계속 둘러보기', close]]); // 하는 차례대로 단추를 둔다
       }).catch(() => { if (alive) talk('조사 노트', '질문을 불러오지 못했어요. 연결을 확인하고 다시 조사해 봐요.'); });
       return;
     }
@@ -929,7 +971,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   }
   // 광장 게시판: 반 친구 게시판(질문과 결과 나누기)과 탐구대 소식
   function showBoard() {
-    say({name: '마을 게시판'}, ['반 친구들이 남긴 질문과 결과 쪽지가 붙어 있다. 한쪽에는 탐구대 소식도 걸려 있다.'], [['반 친구 게시판 보기', () => { close(); keys.clear(); path = []; window.dispatchEvent(new Event('open-class-board')); }], ['탐구대 소식 보기', () => { close(); showNews(); }], ['돌아가기', close]]);
+    say({name: '마을 게시판'}, ['반 친구들이 남긴 질문과 결과 쪽지가 붙어 있다. 한쪽에는 지역마다 필요한 도움이 적혀 있다.'], [['복구할 지역 고르기',()=>introDone()?chooseJourney():finishIntro()], ...(setPace ? [['빠르게 문제만', () => { close(); checkpoint(); setPace('quick'); }]] : []), ['반 친구 게시판 보기', () => { close(); keys.clear(); path = []; window.dispatchEvent(new Event('open-class-board')); }], ['탐구대 소식 보기', () => { close(); showNews(); }], ['돌아가기', close]]);
   }
   function showNews() {
     const names = {'R3-G04': '관리실 빛 자물쇠', 'R3-G05': '가린 회로 추리', 'R3-G06': '부두 전자석 공방', 'R3-G07': '고철 부두 크레인'};
@@ -938,7 +980,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   }
 
   // ---------------------------------------------------------------- 이동과 충돌
-  let gw = 0, gh = 0;
+  let gw = 0, gh = 0, obstacleRects = [];
   function buildWalkGrid() {
     gw = S.W / CELL; gh = S.H / CELL;
     walkGrid = new Uint8Array(gw * gh);
@@ -947,6 +989,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     for (const t of targets.filter((t) => t.placement || t.field || t.tower || t.chuck)) rects.push(t.tower ? {x: t.x - 46, y: t.y - 20, w: 92, h: 22} : t.chuck ? {x: t.x - 22, y: t.y - 14, w: 44, h: 16} : {x: t.x - 24, y: t.y - 22, w: 48, h: 24});
     for (const n of npcs) rects.push({x: n.home.x - 9, y: n.home.y - 8, w: 18, h: 10});
     for (const t of targets.filter(t => t.healthPortal)) rects.push({x:t.x-50,y:t.y-20,w:100,h:24});
+    obstacleRects = rects;
     for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
       const cx = i * CELL + CELL / 2, cy = j * CELL + CELL / 2;
       const ch = S.g[Math.floor(cy / T)]?.[Math.floor(cx / T)];
@@ -955,7 +998,14 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
       walkGrid[j * gw + i] = b ? 1 : 0;
     }
   }
-  const blockedAt = (px, py) => { const i = Math.floor(px / CELL), j = Math.floor(py / CELL); return i < 0 || j < 0 || i >= gw || j >= gh || walkGrid[j * gw + i] === 1; };
+  // 경로 찾기 격자의 중심만 검사하면 가장자리에서 발이 몇 픽셀 파고든다.
+  // 실제 이동에서는 같은 바닥 영역도 검사해 분수·벽·포털 앞의 그리기 순서를 지킨다.
+  const blockedAt = (px, py) => { const i = Math.floor(px / CELL), j = Math.floor(py / CELL); return i < 0 || j < 0 || i >= gw || j >= gh || walkGrid[j * gw + i] === 1 || obstacleRects.some(r => px > r.x - 6 + 1e-6 && px < r.x + r.w + 6 - 1e-6 && py > r.y - 4 + 1e-6 && py < r.y + r.h + 4 - 1e-6); };
+  function clearWalkSegment(ax, ay, bx, by) {
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 4));
+    for (let i = 1; i <= steps; i++) if (blockedAt(ax + (bx - ax) * i / steps, ay + (by - ay) * i / steps)) return false;
+    return true;
+  }
   function nearestFree(i, j) {
     if (!walkGrid[j * gw + i]) return [i, j];
     for (let r = 1; r < 8; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) { const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < gw && b < gh && !walkGrid[b * gw + a]) return [a, b]; }
@@ -973,6 +1023,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
         const na = a + da, nb = b + db;
         if (na < 0 || nb < 0 || na >= gw || nb >= gh || prev[key(na, nb)] !== -2 || walkGrid[key(na, nb)]) continue;
         if (da && db && (walkGrid[key(a + da, b)] || walkGrid[key(a, b + db)])) continue;
+        if (!clearWalkSegment(a * CELL + CELL / 2, b * CELL + CELL / 2, na * CELL + CELL / 2, nb * CELL + CELL / 2)) continue;
         prev[key(na, nb)] = key(a, b); q.push(na, nb);
       }
     }
@@ -980,11 +1031,12 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     const out = [];
     for (let k = gk; k !== -1; k = prev[k]) out.push({x: (k % gw) * CELL + CELL / 2, y: Math.floor(k / gw) * CELL + CELL / 2});
     out.reverse();
-    if (out.length) { out[out.length - 1] = {x: tx, y: ty}; if (blockedAt(tx, ty)) out.pop(); }
+    if (out.length && !blockedAt(tx, ty)) { const last = out[out.length - 1]; if (clearWalkSegment(last.x, last.y, tx, ty)) out.push({x: tx, y: ty}); }
     return out;
   }
   function walk(t) {
-    if (!t || locked || !speech.hidden) return;
+    if (!t || locked || !speech.hidden || document.querySelector('dialog[open]')) return;
+    keys.clear(); running = false; path = []; pending = null;
     const a = t.approach || {x: t.x, y: t.y + 28};
     if (Math.hypot(a.x - x, a.y - y) < 26) { pending = null; return inspectTarget(t); }
     pending = t; path = findPath(a.x, a.y);
@@ -995,11 +1047,6 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   const npcTarget = (n) => ({npc: n, x: n.x, y: n.y, approach: {x: n.x, y: n.y + 26}});
 
   // ---------------------------------------------------------------- 목적지
-  // 단원 첫 차시 의뢰(깜빡이 신호탑)가 있으면 그것부터, 없으면 관리실 빛 자물쇠부터 시작한다
-  function firstQuest() {
-    if (MISSIONS['R3-G01']) { const m = MISSIONS['R3-G01']; return {id: 'R3-G01', name: m.quest, info: m, story: '전력망 지구가 멈추면서 항구와 학교 사이 연락이 끊겼어요. 회로 수리 거리의 깜빡이 신호탑부터 살려 봐요.', go: ['동쪽 문을 지나 전력망 지구로 가요. "회로 수리 거리"의 깜빡이 신호탑이에요.']}; }
-    return {id: 'R3-G04', name: '어두운 안내판에 빛을', info: QUESTS['R3-G04'], story: '전력망 지구가 멈추면서 광장까지 어두워졌지요. 관리실 안내판부터 살려 봐요.', go: ['동쪽 문을 지나 전력망 지구로 가요. "전지와 불빛" 구역의 관리실 앞 안내판을 살펴보는 거예요.']};
-  }
   function trackedZone() { const id = getTracked?.() || 'R3-G04'; return MISSIONS[id]?.zone || (['R3-G04', 'R3-G05'].includes(id) ? 'power-1' : 'power-2'); }
   function objective() {
     if (loc === 'hub') {
@@ -1072,22 +1119,24 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     btn('선생님 피드백',()=>{keys.clear();path=[];menu.open=false;openTeaching({api,runId,uid:me.id});}),
     btn('이 지역 자료', () => { keys.clear(); path = []; menu.open = false; openResources({region: loc === 'hub' ? undefined : regionKey}); }),
     btn('못 가는 곳 표시 켜기/끄기', () => { showBlocked = !showBlocked; menu.open = false; canvas.focus({preventScroll: true}); }),
+    ...(editNickname ? [btn('닉네임 바꾸기',()=>{menu.open=false;checkpoint();editNickname();})] : []),
     ...(editAvatar ? [btn('내 모습 바꾸기', () => { menu.open = false; checkpoint(); dispose(); editAvatar(); })] : []),
     btn('새 모험 시작', restart), btn('학생 바꾸기 / 교사 화면', logout));
   root.append(menu);
-  host.replaceChildren(root, make('p', 'rpg-controls', '방향키 또는 화면을 눌러 걷기, 사람과 장소를 누르면 다가가기, E 또는 Enter로 말 걸기'));
+  host.replaceChildren(root, make('p', 'rpg-controls', '방향키 또는 W A S D로 걷기, 사람과 장소를 누르면 다가가기, E 또는 Enter로 말 걸기'));
 
   // ---------------------------------------------------------------- 입력
   // W, A, S, D와 E는 글자판 위치(e.code)로 받아 한글 입력 상태에서도 걷고 말을 건다
   const KEYMAP = {KeyW: 'ArrowUp', KeyA: 'ArrowLeft', KeyS: 'ArrowDown', KeyD: 'ArrowRight'};
-  const typingIn = (e) => { const t = e.target; return t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)); };
+  const typingIn = (t) => t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
+  const paused = () => !speech.hidden || locked || document.hidden || document.querySelector('dialog[open]') || typingIn(document.activeElement) || !canvas.isConnected;
   const down = (e) => {
+    if (paused() || typingIn(e.target) || e.ctrlKey || e.altKey || e.metaKey) { release(); return; }
     if (e.key === 'Shift') running = true;
-    if (!speech.hidden || locked || typingIn(e) || document.querySelector('dialog[open]') || !canvas.isConnected || e.ctrlKey || e.altKey || e.metaKey) return;
     const k = KEYMAP[e.code] || e.key;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)) { e.preventDefault(); keys.add(k); path = []; pending = null; if (document.activeElement !== canvas && !root.contains(document.activeElement)) canvas.focus({preventScroll: true}); }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)) { e.preventDefault(); menu.open = false; canvas.focus({preventScroll: true}); keys.add(k); path = []; pending = null; }
     const onControl = e.target instanceof HTMLElement && e.target !== canvas && !!e.target.closest('button, a, summary, [role=button]');
-    if (e.code === 'KeyE' || (['Enter', ' '].includes(e.key) && !onControl)) {
+    if (!e.repeat && (e.code === 'KeyE' || (['Enter', ' '].includes(e.key) && !onControl))) {
       const n = npcs.filter((n) => !n.hidden && Math.hypot(n.x - x, n.y - y) < 64).sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0];
       if (n) { e.preventDefault(); return talkNpc(n); }
       const it = nearItem(48);
@@ -1098,10 +1147,12 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   };
   const up = (e) => { if (e.key === 'Shift') running = false; keys.delete(KEYMAP[e.code] || e.key); };
   // 창을 떠나거나 다른 창이 열리면 눌린 키를 잊는다(캐릭터가 혼자 계속 걷지 않게)
-  const release = () => { keys.clear(); running = false; };
-  window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', release); document.addEventListener('visibilitychange', release);
+  const release = () => { keys.clear(); running = false; path = []; pending = null; };
+  const focusChanged = (e) => { if (e.target !== canvas) release(); };
+  window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', release); document.addEventListener('visibilitychange', release); document.addEventListener('focusin', focusChanged);
   canvas.addEventListener('pointerdown', (e) => {
-    if (!speech.hidden || locked || !S) return;
+    if (e.button !== 0 || e.isPrimary === false || !speech.hidden || locked || !S || document.querySelector('dialog[open]')) return;
+    release();
     const r = canvas.getBoundingClientRect(), wx = (e.clientX - r.left) * VW / r.width + camX, wy = (e.clientY - r.top) * VH / r.height + camY;
     canvas.focus({preventScroll: true});
     const n = npcs.find((n) => !n.hidden && Math.abs(n.x - wx) < 22 && wy > n.y - 66 && wy < n.y + 6);
@@ -1167,6 +1218,23 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     c.fillStyle = 'rgba(255,255,255,.96)'; c.fillRect(px - 5, by + h - 2, 10, 3);
     c.fillStyle = '#1b2733'; lines.forEach((l, k) => c.fillText(l, px, by + 18 + k * 16));
   }
+  // 말 걸기 안내: 키보드 E와 같은 기준(사람 64, 물건 48, 장소 입구 60 안)으로 가장 가까운 것 하나를 고른다
+  function nearAction() {
+    const n = npcs.filter((n) => !n.hidden && Math.hypot(n.x - x, n.y - y) < 64).sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0];
+    if (n) return `E ${n.name}에게 말 걸기`;
+    if (nearItem(48)) return 'E 줍기';
+    const t = targets.find((t) => { if (t.silent && !t.sign) return false; const a = t.approach || {x: t.x, y: t.y + 28}; return Math.hypot(a.x - x, a.y - y) < 60; });
+    if (!t) return '';
+    const name = t.title || t.label || '';
+    return t.gate || t.map ? `E ${name} 가기` : t.sprite ? `E ${name} 들어가기` : `E ${name} 살펴보기`;
+  }
+  function actionTag(c, text, px, py) {
+    c.font = 'bold 13px "Malgun Gothic",sans-serif'; c.textAlign = 'center';
+    const w = c.measureText(text).width + 18, h = 22, bx = px - w / 2, by = py - h;
+    c.fillStyle = 'rgba(255,248,214,.95)'; c.strokeStyle = '#6b4a00'; c.lineWidth = 2;
+    c.beginPath(); c.roundRect ? c.roundRect(bx, by, w, h, 11) : c.rect(bx, by, w, h); c.fill(); c.stroke();
+    c.fillStyle = '#3d2c00'; c.fillText(text, px, by + 16);
+  }
   function nameTag(c, text, px, py, color = '#fff') {
     c.font = 'bold 12px "Malgun Gothic",sans-serif'; c.textAlign = 'center';
     c.lineWidth = 3; c.strokeStyle = 'rgba(20,24,32,.85)'; c.strokeText(text, px, py); c.fillStyle = color; c.fillText(text, px, py);
@@ -1178,12 +1246,13 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     if (!alive) return;
     const dt = Math.min((now - last) / 1000, 0.04); last = now;
     let dx = 0, dy = 0;
-    if (speech.hidden && !locked) {
+    if (paused()) release();
+    else {
       dx = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
       dy = (keys.has('ArrowDown') ? 1 : 0) - (keys.has('ArrowUp') ? 1 : 0);
-      // 이미 지나온 쪽 칸으로 되돌아가지 않게, 다음 점이 더 가까우면 앞 점을 건너뛴다
-      while (path.length > 1 && Math.hypot(path[1].x - x, path[1].y - y) <= Math.hypot(path[1].x - path[0].x, path[1].y - path[0].y)) path.shift();
-      if (path.length) { const p = path[0], d = Math.hypot(p.x - x, p.y - y); if (d < 5) path.shift(); else { dx = (p.x - x) / d; dy = (p.y - y) / d; } }
+      // 모서리를 가로질러 막히지 않도록 빈 선분일 때만 앞 경유점을 건너뛴다.
+      while (path.length > 1 && Math.hypot(path[1].x - x, path[1].y - y) <= Math.hypot(path[1].x - path[0].x, path[1].y - path[0].y) && clearWalkSegment(x, y, path[1].x, path[1].y)) path.shift();
+      if (path.length) { const p = path[0], d = Math.hypot(p.x - x, p.y - y); if (d < 5 && clearWalkSegment(x, y, p.x, p.y)) { x = p.x; y = p.y; path.shift(); } else if (d) { dx = (p.x - x) / d; dy = (p.y - y) / d; } }
       if (pending && !path.length) { const t = pending; pending = null; inspectTarget(t); }
     }
     const moving = !!(dx || dy);
@@ -1193,7 +1262,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
       const horiz = dir === 'left' || dir === 'right', ax = Math.abs(dx), ay = Math.abs(dy);
       if (horiz ? ay > ax * 1.4 : ax > ay * 1.4) dir = ax > ay ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up';
       else dir = horiz ? (dx > 0 ? 'right' : dx < 0 ? 'left' : dir) : (dy > 0 ? 'down' : dy < 0 ? 'up' : dir);
-      const sp = (running ? 300 : 190) * dt;
+      const sp = Math.min((running ? 300 : 190) * dt, path.length ? Math.hypot(path[0].x - x, path[0].y - y) : Infinity);
       if (!blockedAt(x + dx * sp, y)) x += dx * sp;
       if (!blockedAt(x, y + dy * sp)) y += dy * sp;
       // 문 안으로 걸어 들어가면 이동을 묻는다
@@ -1277,6 +1346,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
       if (m) { const bob = reduceMotion ? 0 : Math.sin(now / 220) * 3; c.fillStyle = '#ffd93b'; c.strokeStyle = '#6b4a00'; c.lineWidth = 2; c.beginPath(); c.arc(n.x, n.y - FH - 8 + bob, 10, 0, Math.PI * 2); c.fill(); c.stroke(); nameTag(c, m, n.x, n.y - FH - 3 + bob, '#5a3b00'); }
     }
     nameTag(c, nickname || '나', x, y + 16, '#fff6c2');
+    if (!path.length && !keys.size && speech.hidden && !locked) { const hint = nearAction(); if (hint) actionTag(c, hint, x, y - FH - 14); } // 가까이 있는 사람이나 장소에서 할 수 있는 일을 머리 위에 알려 준다
     if (tg) {
       for (const m of tg.list()) if (inView(m.x, m.y)) { nameTag(c, m.nickname || '친구', m.x, m.y + 16, '#a8ffbe'); const b = tg.bubble(m.id); if (b) chatBubble(c, b, m.x, m.y - FH - 4); }
       const mine = tg.bubble(me?.id); if (mine) chatBubble(c, mine, x, y - FH - 4);
@@ -1318,15 +1388,18 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   // 5초마다 위치를 남기되, 지도와 자리가 그대로면 서버로 다시 보내지 않는다(가만히 서 있는 학생 수만큼 전체 기록을 계속 보내던 것을 막는다).
   let lastSpot = '';
   const timer = setInterval(() => { if (locked) return; const spot = `${loc}|${Math.round(x)}|${Math.round(y)}`; if (spot === lastSpot) return; lastSpot = spot; checkpoint(); }, 5000);
-  const onRoute = () => routeObjective(), onTracked = () => markObjective(), onRepair = () => { if (loc === 'hub' && S) { close(); startRepair(); } };
+  const onRoute = () => routeObjective(), onTracked = () => {if(adv.welcomed)rememberQuest(adv,adv.tracked);markObjective();}, onRepair = () => { if (loc === 'hub' && S) { close(); startRepair(); } };
+  const onRegionChoice = () => { if(loc!=='hub')return;if(!S||!progress.quests.length)return talk('길 안내','지도를 불러오고 있어요. 잠시 뒤 다시 지역을 골라 주세요.');if(introDone())chooseJourney();else skipStory(true); };
+  const onNickname=e=>{if(typeof e.detail?.nickname==='string')nickname=e.detail.nickname;};window.addEventListener('student-nickname-changed',onNickname);
   window.addEventListener('open-repair', onRepair);
+  window.addEventListener('open-region-choice', onRegionChoice);
   window.addEventListener('adventure-route', onRoute); window.addEventListener('adventure-tracked', onTracked);
   async function init() {
     const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     const [npcData, prog, placeData, , resData, fieldData, extraData, builtinRes] = await Promise.all([get('/api/npcs'), get('/api/adventure?runId=' + encodeURIComponent(runId || '')), get('/api/placements'), loadMissions(), get('/api/resources'), loadField(), loadWorldExtra(), get('/resources.json')]);
     if (!alive) return;
     teacherRes = (resData?.resources || []).filter((r) => r.published);
-    progress = prog || {quests: []};
+    progress = prog || {quests: []}; markLoaded?.();
     ctxSignOn = !!story.repaired;
     signState = ctxSignOn ? 'on' : 'off';
     S = loc === 'hub' ? buildHub({signOn: ctxSignOn}) : buildRegion(loc, regionKey, zone ? zone.games : region.zones.map((z) => ({title: z.title, map: z.id})), !!zone, {signOn: questDone('R3-G04'), lifeLit: questDone('R5-G04'), lifeArm: questDone('R5-G01'), lifeHay: questDone('R5-G07'), lifeWind: questDone('R5-G08'), lifeMap: questDone('R5-G02'), lifeClinic: questDone('R5-G03'), lifeBeam: questDone('R5-G05'), lifeLens: questDone('R5-G06'), lifeHouse: questDone('R5-G09')});
@@ -1386,7 +1459,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
       tg = createTogether({api, me: {id: me.id, nickname}, map: loc, root, make, btn, getPos: () => ({x, y, dir, moving: keys.size > 0 || path.length > 0}), onChange: onTogether});
       if (towerT) { const pull = () => { loadClassGoal(api).then((g) => { if (alive && g) { classGoal = g; goalBanner(g); } }); api('weekly').then((w) => { weeklyOn = !!w?.on; }).catch(() => {}); }; pull(); goalTimer = setInterval(pull, 60000); }
       if (chuckT) api('duel?region=' + DUEL_OF[loc]).then((d) => { duelSt = d; }).catch(() => {});
-      if (loc === 'hub' && record) api('my-learning').then((d) => { thinkPending = !!d?.rethink?.some((r) => r.done && r.parts.every((p) => p.now == null)) || !!laterTransfer(); }).catch(() => {});
+      if (loc === 'hub' && record) api('my-learning').then((d) => { thinkPending = !!d?.rethink?.some((r) => r.done && r.parts.every((p) => p.now == null) && !deferred(r.id)) || !!laterTransfer(); }).catch(() => {});
     }
     if (chuckT && me?.guest) api('duel?region=' + DUEL_OF[loc]).then((d) => { duelSt = d; }).catch(() => {});
     if (loc === 'hub' && story.step === 'arrival') arrival();
@@ -1398,9 +1471,11 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   init().catch((e) => { console.error(e); talk('안내', '지도를 불러오지 못했어요. 새로고침해 주세요.'); });
 
   function dispose() {
+    regionChoice?.close();regionChoice=null;window.removeEventListener('student-nickname-changed',onNickname);
     tg?.stop(); tg = null; clearInterval(goalTimer);
     window.removeEventListener('adventure-route', onRoute); window.removeEventListener('adventure-tracked', onTracked); window.removeEventListener('open-repair', onRepair);
-    alive = false; cancelAnimationFrame(raf); clearInterval(timer); clearInterval(typing); window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', release);
+    window.removeEventListener('open-region-choice', onRegionChoice);
+    alive = false; cancelAnimationFrame(raf); clearInterval(timer); clearInterval(typing); window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', release); document.removeEventListener('focusin', focusChanged);
   }
   return dispose;
 }

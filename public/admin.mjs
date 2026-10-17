@@ -1,5 +1,5 @@
 import './compat.mjs';
-import {openTeaching} from './teaching-ui.mjs';
+import {openTeaching, openLearningDashboard} from './teaching-ui.mjs';
 // 선생님·관리자용 학급 관리 화면. 학생 명부, 접속 코드 발급, 마을 인물(NPC), 학습 자료 링크, 반 친구 게시판 관리.
 import {getAvatarSheet,FW,FH,drawFrame,cleanAvatar,preloadLook} from '/sprites.mjs';
 import {PRESETS,randomAvatar,sanitizeAvatar} from '/vendor/shared/avatar.mjs';
@@ -97,6 +97,7 @@ window.addEventListener('beforeunload',e=>{if(!S.printed){e.preventDefault();e.r
 function setTopnav(){
   const items=[el('a',{class:'linkbtn',href:'/'},'게임 화면으로'),el('a',{class:'linkbtn',href:'/manual.html',target:'_blank',rel:'noopener'},'사용설명서')];
   if(S.me){
+    if(['teacher','admin'].includes(S.me.role))items.push(button(S.me.role==='admin'?'학반 비교 대시보드':'학습 대시보드',guard(()=>openLearningDashboard({api,classId:S.me.role==='admin'?'':S.classId})),'secondary'));
     if(S.me.role==='teacher')items.push(button('내 코드 바꾸기',guard(changeOwnCode),'secondary'));
     items.push(button('로그아웃',guard(logout),'secondary'));
   }

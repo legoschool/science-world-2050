@@ -25,15 +25,15 @@ export function signalDevice({el, button, mode, owner = '', onAction, onReady, o
   const c = canvas.getContext('2d');
   const s = {tape: false, led: false, battery: null, clip: false, pressed: false, playOn: false, playing: false, flipped: false, seenOn: false, seenOff: false, ready: false, done: false, tries: 0};
   if (mode !== 'build') Object.assign(s, {tape: true, led: true, battery: mode === 'fix' ? 'up' : 'down', clip: true});
-  let alive = true, raf = 0, downAt = 0, seq = [], endTimer = 0, timers = [];
+  let alive = true, raf = 0, downAt = 0, seq = [], chosen = [], endTimer = 0, timers = [];
   const built = () => s.tape && s.led && s.battery && s.clip;
-  const lit = () => (mode === 'receive' ? s.playOn : built() && s.pressed && s.battery === 'down');
+  const lit = () => (mode === 'receive' || s.playing ? s.playOn : built() && s.pressed && s.battery === 'down');
   const later = (fn, ms) => { const t = setTimeout(() => { if (alive) fn(); }, ms); timers.push(t); return t; };
   const wait = (ms) => new Promise((r) => later(r, ms));
   const say = (text) => { status.textContent = text; };
 
   function press(v) {
-    if (mode === 'receive' || !built() || s.pressed === v) return;
+    if (mode === 'receive' || s.playing || !built() || s.pressed === v) return;
     s.pressed = v;
     const now = performance.now();
     if (v) { downAt = now; clearTimeout(endTimer); if (lit()) s.seenOn = true; }
@@ -52,12 +52,33 @@ export function signalDevice({el, button, mode, owner = '', onAction, onReady, o
       endTimer = later(() => { const p = seq.join(''); seq = []; say('보낸 신호: ' + patternLabel(p)); onPattern?.(p); }, 1300);
     }
   }
-  async function play(p) {
+  async function play(p, sending = false) {
     if (s.playing) return;
-    s.playing = true; say('신항이가 신호를 보내는 중…');
+    clearTimeout(endTimer); seq = []; s.pressed = false;
+    s.playing = true; say(sending ? '내가 고른 깜빡임을 보내는 중…' : '신항이가 신호를 보내는 중…');
     await wait(600);
     for (const ch of p) { if (!alive) return; s.playOn = true; await wait(ch === 'S' ? 260 : 900); s.playOn = false; await wait(420); }
-    s.playing = false; say('신호가 끝났어요. 다시 보려면 "다시 보기"를 눌러 주세요.');
+    if (!alive) return;
+    s.playing = false;
+    if (sending) { say('보낸 신호: ' + patternLabel(p)); onPattern?.(p); }
+    else say('신호가 끝났어요. 다시 보려면 "다시 보기"를 눌러 주세요.');
+  }
+  // 누르는 빠르기 대신 학생이 짧고 긴 순서를 직접 고를 수 있는 같은 신호기의 조작법.
+  function signalPicker() {
+    const how = el('details', {class: 'signal-picker'}, el('summary', {}, '깜빡임을 골라 보내기'));
+    how.open = true; // 누르는 길이를 맞추기 어려운 학생이 바로 찾게 처음부터 펼쳐 둔다
+    const sequence = el('p', {class: 'signal-sequence', role: 'status'});
+    const send = button('고른 신호 보내기', async () => {
+      if (!chosen.length || s.playing) return;
+      controls.inert = true;
+      await play(chosen.join(''), true);
+      if (alive) { controls.inert = false; drawChoice(); }
+    }, 'mission-go');
+    const drawChoice = () => { sequence.replaceChildren(chosen.length ? '내가 고른 신호: ' : '짧게와 길게를 눌러 보낼 순서를 만들어요.', chosen.length ? blips(el, chosen.join('')) : ''); send.disabled = !chosen.length; };
+    const add = p => { if (s.playing) return; if (chosen.length >= 4) { say('깜빡임은 네 번까지 고를 수 있어요. 지우고 다시 골라도 돼요.'); return; } chosen.push(p); drawChoice(); };
+    const controls = el('div', {class: 'signal-tray'}, button('짧은 깜빡임 추가', () => add('S'), 'secondary'), button('긴 깜빡임 추가', () => add('L'), 'secondary'), button('고른 깜빡임 지우기', () => { chosen = []; drawChoice(); }, 'secondary'), send);
+    how.append(el('p', {}, '누르는 시간은 재지 않아요. 약속표와 같은 순서로 짧게와 길게를 고른 뒤 보내세요.'), sequence, controls);
+    drawChoice(); return how;
   }
   function hold(label) {
     const b = button(label, () => {}, 'signal-hold');
@@ -87,6 +108,7 @@ export function signalDevice({el, button, mode, owner = '', onAction, onReady, o
     if (mode === 'fix') { tray.append(hold('손잡이 누르기'), button('동전 전지 뒤집어 보기', () => { s.battery = s.battery === 'down' ? 'up' : 'down'; s.flipped = true; say('동전 전지를 뒤집었어요. 손잡이를 다시 눌러 보세요.'); }, 'secondary')); return; }
     if (mode === 'receive') { tray.append(button('다시 보기', () => node.replay?.(), 'secondary')); return; }
     tray.append(hold(mode === 'send' ? '손잡이로 신호 보내기' : '손잡이 누르기'));
+    if (mode === 'send') tray.append(signalPicker());
   }
   canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.focus({preventScroll: true}); canvas.setPointerCapture?.(e.pointerId); press(true); });
   for (const k of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(k, () => press(false));
@@ -149,7 +171,7 @@ export function signalDevice({el, button, mode, owner = '', onAction, onReady, o
     c.font = '13px "Malgun Gothic",sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#e8ecf2';
     c.fillText('긴 다리 쪽 테이프', 220, 266); c.fillText('짧은 다리 쪽 테이프', 505, 266);
     if (s.battery) drawBattery(s.battery);
-    if (s.clip) drawClip(mode === 'receive' ? s.playOn : s.pressed);
+    if (s.clip) drawClip(mode === 'receive' || s.playing ? s.playOn : s.pressed);
     if (s.led) drawLed(on);
     if (on && !reduceMotion()) { c.strokeStyle = 'rgba(255,170,160,.55)'; c.lineWidth = 2; for (let i = 0; i < 8; i++) { const a = -Math.PI + (i / 7) * Math.PI; c.beginPath(); c.moveTo(365 + Math.cos(a) * 30, 104 + Math.sin(a) * 30); c.lineTo(365 + Math.cos(a) * 52, 104 + Math.sin(a) * 52); c.stroke(); } }
     raf = requestAnimationFrame(draw);

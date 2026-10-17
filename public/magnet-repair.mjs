@@ -1,9 +1,11 @@
+import {electricitySupport,electricityTerms} from './electricity-support.mjs';
 import {paint} from './assets/science-parts.mjs';
 export function magnetRepair(panel,{el,button,state,record,save,back}){
  const r=state.magnetRepair??={inspected:[],fixed:false,tested:false,hint:0};r.pending??=false;let message='',powered=false,timer;
  const emit=(kind,answer)=>record('magnetRepair.'+kind,'magnetRepair',{answer,hint:r.hint});
  const labels={battery:'전지',contact:'집게 접점',ends:'에나멜선 양 끝'};
  function render(){panel.replaceChildren(el('h2',{},'붙지 않는 인양 장치'),el('p',{},'공방지기: “스위치를 닫아도 철심 빵 끈이 그대로예요. 전원을 끄고 한 곳씩 살펴봐요.”'));
+panel.prepend(electricitySupport(el,'G06','repair'));panel.append(electricityTerms(el,'G06','repair'));
  for(const key of Object.keys(labels))panel.append(button(labels[key]+' 점검',()=>{if(powered)return;if(!r.inspected.includes(key))r.inspected.push(key);emit('inspected',key);message={battery:'같은 규격의 정상 전지예요. 전지를 바꿀 근거는 아직 없어요.',contact:'집게는 금속 접점에 단단히 물려 있어요.',ends:r.fixed?'양 끝의 금속 부분이 드러나 집게에 닿아 있어요.':'집게에 닿는 선 끝에 피복이 남아 있어요. 감긴 부분의 피복은 유지해야 해요.'}[key];save();render()}));
  panel.append(el('p',{},'살펴본 곳: '+(r.inspected.map(k=>labels[k]).join(', ')||'아직 없음')));
  for(const key of Object.keys(labels))panel.append(button({battery:'전지만 바꾸기',contact:'집게만 다시 물리기',ends:'양 끝 피복만 더 벗기기'}[key],()=>{if(powered)return;if(r.pending){message='방금 한 곳을 수정했어요. 먼저 잠깐 켜서 결과를 다시 확인해 주세요.';render();return}if(r.inspected.length<3){message='전지, 접점, 끝 피복을 먼저 모두 살펴보세요.';render();return}emit('repaired',key);r.pending=true;if(key==='ends')r.fixed=true;r.tested=false;message=key==='ends'?'끝부분만 수정했어요. 이제 잠깐 작동시켜 결과를 확인해요.':'한 곳만 바꿨어요. 작동시켜 원인이 해결됐는지 확인해 봐요.';save();render()}));

@@ -1,6 +1,14 @@
 // A short investigation inside the mission. Initial ideas and help carry no penalty.
 // 탐색 → 같이 정리하기(돌아보기) → 자기 말로 설명하기(writeup, 문항이 있는 의뢰만) → 새 조건 적용 순서로 간다.
 import {writeupView} from './writeup.mjs';
+import {learningSupport,termHints} from './learning-support.mjs';
+const INQUIRY_HELP={
+  sun:{goal:'막대 높이를 같게 두고 태양 고도에 따른 그림자 길이를 비교해요.',terms:[{word:'태양 고도',clue:'해가 뜬 높이'},{word:'그림자',clue:'빛이 가려져 생기는 것'}]},
+  air:{goal:'시간과 공기 통로를 바꾸어 연소에 필요한 조건을 알아봐요.',terms:[{word:'산소',clue:'물질이 계속 탈 때 충분히 필요한 것'},{word:'공급',clue:'필요한 것이 계속 들어오는 것'}]},
+  circuit:{goal:'스위치와 전구의 접점을 살펴 불이 켜지는 전기 회로를 만들어요.',terms:[{word:'꼭지',clue:'전구 아래쪽 금속 접점'},{word:'꼭지쇠',clue:'전구 옆면의 금속 접점'},{word:'전기 회로',clue:'전기가 흐를 수 있게 연결한 길'}]},
+  evidence:{goal:'원래 자료와 비교 조건을 확인해 주장에 근거가 있는지 판단해요.',terms:[{word:'원래 자료',clue:'제목이 나온 처음 기록'},{word:'비교 조건',clue:'두 시험에서 같게 둬야 할 것'}]},
+  insulation:{goal:'처음과 나중의 온도를 비교해 단열재의 역할을 설명해요.',terms:[{word:'단열재',clue:'집에서 열이 빠져나가는 것을 줄이는 재료'},{word:'열의 이동',clue:'단열재가 줄이는 것'}]}
+};
 export function discovery(host,{el,button,config,ms,save,record,api,id,uid,runId,version,revision,done,preview=false,writeup=null}) {
   const d=ms.discovery??={phase:'explore',choices:Object.fromEntries(config.controls.map(c=>[c.id,c.options[0].id])),trials:[],prediction:''};
   let alive=true,busy=false,stopSub=()=>{};
@@ -29,9 +37,9 @@ export function discovery(host,{el,button,config,ms,save,record,api,id,uid,runId
   }
   function summarize(){prediction();support('explain');d.phase='reflect';save();render();}
   function textInput(label,key){const n=el('textarea',{'aria-label':label,maxlength:300,rows:2});n.value=draftValue(key);n.oninput=()=>{drafts[key]=n.value;storeDrafts();};return el('label',{},el('span',{},label),n);}
-  function history(){
+  function history(open=d.trials.length>0){
     const h=el('details',{class:'discovery-history'},el('summary',{},`내 관찰 나란히 보기 (${d.trials.length})`));
-    if(d.trials.length)h.open=true;
+    h.open=open;
     const list=el('div',{class:'discovery-observations'});
     d.trials.forEach((t,i)=>{const card=el('figure',{},scene(t.view,t.observation),el('figcaption',{},`${i+1}. ${t.conditionText}`,el('p',{},t.observation)));list.append(card);});
     if(!d.trials.length)list.append(el('p',{},'아직 관찰 전이에요. 설명을 보고 다시 실험해도 좋아요.'));
@@ -41,12 +49,16 @@ export function discovery(host,{el,button,config,ms,save,record,api,id,uid,runId
     stopSub();stopSub=()=>{};
     if(d.phase==='writeup'&&!writeup?.item)d.phase='transfer';
     host.className='discovery';host.dataset.phase=d.phase;
-    host.replaceChildren(el('h2',{tabindex:-1},config.title),el('p',{class:'discovery-problem'},config.problem),el('p',{class:'discovery-safety'},config.safety));
+    const guide={explore:'조건을 바꾸어 관찰해요. 준비되면 「같이 정리하기」를 눌러요.',reflect:'관찰을 비교한 뒤 아래에서 지금 내 생각을 골라요.',writeup:'관찰을 근거로 설명을 보내거나 선생님께 말로 설명하기를 골라요.',transfer:'새 상황에서 할 일을 골라요. 확인한 뒤 「단서를 가지고 의뢰 이어가기」로 가요.'};
+    host.replaceChildren(el('h2',{tabindex:-1},config.title),el('p',{class:'discovery-problem'},config.problem),el('p',{class:'discovery-safety'},config.safety),el('p',{class:'discovery-next-guide'},guide[d.phase]||guide.transfer));
+    const help=INQUIRY_HELP[config.kind];
+    if(help&&d.phase!=='writeup')host.append(learningSupport(el,{goal:help.goal}));
     status.textContent='';
     if(d.phase==='explore'){
       const last=d.trials.at(-1),stage=el('section',{class:'discovery-bench','aria-label':'현장 탐구'});
       stage.append(scene(last?.view,last?.observation||'조건을 고르고 현장을 살펴보세요.'));
-      stage.append(el('p',{},last?'마지막 관찰: '+last.conditionText:'아래에서 조건을 고른 뒤 관찰해 보세요.'));
+      stage.append(el('p',{},last?'마지막 관찰: '+last.conditionText:'조건을 고른 뒤 「이 조건으로 관찰하기」를 눌러요.'));
+      stage.append(el('p',{},'지금 고른 조건: '+config.controls.map(c=>c.label+' '+(c.options.find(o=>o.id===d.choices[c.id])?.label||'선택 전')).join(' / ')));
       const controls=el('div',{class:'discovery-controls'});
       for(const c of config.controls){
         if(c.advanced&&!d.advanced)continue;
@@ -77,16 +89,18 @@ export function discovery(host,{el,button,config,ms,save,record,api,id,uid,runId
         nextLabel:'새 조건에 적용해 보기',onNext:()=>{d.phase='transfer';save();render();host.querySelector('h2').focus();},
         onObserve:()=>{d.phase='explore';save();render();host.querySelector('h2').focus();}});
     }else{
-      host.append(el('h3',{},'다른 곳에서도 통할까요?'),el('p',{},config.transfer.question),textInput('그렇게 생각한 까닭 (선택)','transferReason'));
+      host.append(el('h3',{},'다른 곳에서도 통할까요?'),el('p',{},config.transfer.question),textInput('그렇게 생각한 까닭 (선택)','transferReason'),el('p',{},'아래에서 내 생각과 맞는 것을 하나 골라 확인해요.'));
       for(const o of config.transfer.options)host.append(button(o.label,()=>act(async()=>{
         const p={answer:o.id,reason:draftValue('transferReason')};const result=await api('discovery-check',{kind:'discovery.transfer',payload:payload(p)});
         if(!alive)return;remember('transfer',p);d.transferReason=p.reason;delete drafts.transferReason;storeDrafts();d.transferAnswer=o.id;d.transferFeedback=result.feedback;d.transferPassed=result.correct===true;save();render();status.textContent=result.feedback;
       })));
       if(d.transferFeedback)host.append(el('p',{class:'discovery-clue'},d.transferFeedback));
+      host.append(history(false),el('details',{class:'discovery-explanation'},el('summary',{},'관찰로 정리한 개념 다시 보기'),el('p',{},config.explanation)));
       host.append(button('내 관찰과 설명 다시 보기',()=>{d.phase='reflect';save();render();}));
       if(writeup?.item)host.append(button(ms.writeup?.versions?.length?'내가 쓴 설명 보기':'설명 쓰기',()=>{d.phase='writeup';save();render();host.querySelector('h2').focus();}));
       if(d.transferPassed)host.append(button('단서를 가지고 의뢰 이어가기',()=>{if(busy)return;d.complete=true;save();done();},'discovery-primary'));
     }
+    if(help&&d.phase!=='writeup')host.append(termHints(el,help.terms,()=>support('clue')));
     host.append(status);
   }
   const scene=(view,description)=>drawScene(el,config.kind,view,description);
@@ -101,6 +115,7 @@ export function drawScene(el,kind,view={},description=''){
     const line=(pts,col='#aec1d2',w=5)=>{c.strokeStyle=col;c.lineWidth=w;c.beginPath();pts.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.stroke();};
     const circle=(x,y,r,col)=>{c.fillStyle=col;c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.fill();};
     const label=(s,x,y,col='#f2f6fc')=>{c.fillStyle=col;c.font='18px sans-serif';c.textAlign='center';c.fillText(s,x,y);};
+    if(!Object.keys(view).length){label('아직 관찰하기 전이에요',310,140);label('조건을 고르고 「이 조건으로 관찰하기」를 눌러요',310,184);return cv;}
     rect(0,268,620,52,'#344c4b');
     if(kind==='sun'){
       const h=view.height||74,L=view.length||170,x=300,y=264,sx=240,sy=y-h*(L+x-sx)/L;
@@ -120,6 +135,8 @@ export function drawScene(el,kind,view={},description=''){
       line([[110,241],[110,254],[360,254],[360,view.contact==='side'?199:145],[view.contact==='side'?405:381,view.contact==='side'?199:145]],'#9bc9e0');
       label(view.closed?'스위치 닫힘':'스위치 열림',258,30);label(view.lit?'길이 밝아졌어요':'어두운 비상 통로',495,305);
       label('전지',110,300);
+      label('유리',495,126);label('꼭지쇠',532,197);label('꼭지',514,238);
+      line([[470,121],[452,133]],'#cbd5de',1);line([[486,193],[437,200]],'#cbd5de',1);line([[485,233],[428,223]],'#cbd5de',1);
     }else if(kind==='evidence'){
       rect(105,48,410,205,'#f3eedb');rect(125,67,370,38,'#2b5367');label('새 분류 장치가 더 빠르다?',310,94);
       if(view.source){label(view.oldRecord,310,145,'#273e4a');label(view.newRecord,310,177,'#273e4a');label('같은 종류의 물건을 분류했어요',310,217,'#273e4a');}

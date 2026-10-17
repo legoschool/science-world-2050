@@ -2,6 +2,7 @@
 import re, base64, binascii, ipaddress, socket, os, ssl, threading
 import argparse, hashlib, hmac, json, mimetypes, secrets, sqlite3, time, tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from http.cookies import SimpleCookie
@@ -15,6 +16,12 @@ import inquiry
 import health_inquiry
 import health_partner
 import writeup
+import answer_support
+import learning_metrics
+import learning_reset
+import textbook
+REQUEST_LEARNING_EPOCH=ContextVar('request_learning_epoch',default=None)
+SQLITE_REQUEST_CONNECTION=ContextVar('sqlite_request_connection',default=None)
 DB=Path(tempfile.gettempdir())/'science-world-local-demo'/'demo.sqlite3'
 PORT=4186
 LAN=False
@@ -25,6 +32,7 @@ PG=bool(DATABASE_URL)
 PUBLIC=os.environ.get('VERCEL')=='1' or os.environ.get('SCIENCE_PUBLIC')=='1'
 READY=False
 SESSION_SECONDS=28800
+TEXTBOOK_HOUR,TEXTBOOK_DAY=120,200 # 학생 한 명이 1시간, 24시간 동안 받을 수 있는 교과서 쪽 수(전체 265쪽보다 적게)
 RESOURCE_EVENTS={'resource.opened','resource.external_opened','resource.video_requested'}
 MOTOR_EVENTS={'motor.prepared','motor.switched','motor.observed','motor.hint'}
 BUZZER_EVENTS={'buzzer.prepared','buzzer.switched','buzzer.observed','buzzer.hint'}
@@ -49,9 +57,16 @@ EVENTS |= inquiry.EVENTS
 POE_EVENTS={'mission.predicted','mission.reflected','mission.transfer'}
 EVENTS |= POE_EVENTS
 TASKS.add('discovery')
-# 자기 말로 설명하기(writeup.py): 탐구 뒤 관찰을 근거로 쓰는 설명. 낱말 포함 여부만 자동으로 보고 개념은 교사가 확인한다.
+# 자기 말로 설명하기: 원문과 교사 검토를 보존하고 문항 판의 핵심어 판정을 별도로 기록한다.
 EVENTS |= writeup.EVENTS
 TASKS.add('writeup')
+EVENTS.add('answer.submitted')
+TASKS.add('answer')
+# 길 고르기: 이야기를 모두 보는 길과 빠르게 문제만 푸는 길. 고른 기록과 의뢰에 들어간 길을 남긴다(선생님 대시보드의 의뢰별 길).
+PACE_EVENTS={'pace.chosen','pace.entered'}
+PACES={'story','quick'}
+EVENTS |= PACE_EVENTS
+TASKS.add('pace')
 # ---------------------------------------------------------------- 저장소
 # SQL은 SQLite 문법으로 쓰고, Postgres에서는 자리표(? → %s)와 몇몇 차이만 바꿔 보낸다.
 class Row(dict):
@@ -87,6 +102,13 @@ class PGConn:
         cur=self.raw.cursor();cur.execute(q,tuple(pg_value(v) for v in params));return PGCursor(cur)
 _PG={'raw':None,'used':0.0,'depth':0}
 _PG_LOCK=threading.RLock()
+class SQLiteRequestConn:
+    """Reuse the guarded transaction for nested validation reads and writes."""
+    def __init__(self,raw):self.raw=raw
+    def execute(self,sql,params=()):
+        if sql.strip().upper()=='BEGIN IMMEDIATE' and self.raw.in_transaction:return self.raw.execute('SELECT 1 WHERE 0')
+        return self.raw.execute(sql,params)
+    def __getattr__(self,name):return getattr(self.raw,name)
 def pg_connect():
     import pg8000.dbapi
     from urllib.parse import unquote
@@ -96,10 +118,24 @@ def pg_connect():
 @contextmanager
 def conn():
     if not PG:
+        active=SQLITE_REQUEST_CONNECTION.get()
+        if active and active[0]==str(DB):
+            yield active[1];return
         c=sqlite3.connect(DB,timeout=10);c.row_factory=sqlite3.Row
+        token=None
         try:
-            with c: yield c
-        finally: c.close()
+            with c:
+                expected=REQUEST_LEARNING_EPOCH.get()
+                if expected is not None:
+                    c.execute('BEGIN IMMEDIATE')
+                    guarded=SQLiteRequestConn(c)
+                    token=SQLITE_REQUEST_CONNECTION.set((str(DB),guarded))
+                    learning_reset.require_epoch(guarded,expected)
+                    yield guarded
+                else:yield c
+        finally:
+            if token is not None:SQLITE_REQUEST_CONNECTION.reset(token)
+            c.close()
         return
     # 한 프로세스가 연결 하나를 잠금과 함께 쓴다. 안쪽에서 다시 열면 바깥 트랜잭션에 합쳐진다.
     with _PG_LOCK:
@@ -111,7 +147,10 @@ def conn():
             _PG['used']=time.time()
         raw=_PG['raw'];_PG['depth']+=1
         try:
-            yield PGConn(raw)
+            c=PGConn(raw)
+            expected=REQUEST_LEARNING_EPOCH.get()
+            if expected is not None:learning_reset.require_epoch(c,expected,pg=True)
+            yield c
             if _PG['depth']==1:raw.commit()
         except BaseException:
             if _PG['depth']==1:
@@ -133,6 +172,7 @@ PG_SCHEMA=['CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY,role TEXT,cl
     'CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,uid TEXT NOT NULL,expires DOUBLE PRECISION NOT NULL)',
     'CREATE INDEX IF NOT EXISTS session_uid ON sessions(uid)',
     'CREATE TABLE IF NOT EXISTS login_failures(key TEXT NOT NULL,t DOUBLE PRECISION NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS textbook_hits(owner TEXT NOT NULL,t DOUBLE PRECISION NOT NULL)','CREATE INDEX IF NOT EXISTS textbook_hits_owner ON textbook_hits(owner,t)',
     'CREATE INDEX IF NOT EXISTS failure_key ON login_failures(key,t)',
     'CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,owner TEXT NOT NULL,class_id TEXT,created DOUBLE PRECISION NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL,context TEXT,status TEXT NOT NULL)',
     'CREATE INDEX IF NOT EXISTS report_class ON reports(class_id,created)',
@@ -151,8 +191,8 @@ PG_SCHEMA=['CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY,role TEXT,cl
     'CREATE INDEX IF NOT EXISTS field_done_class ON field_done(class_id)']
 PG_SCHEMA += teaching.SCHEMA
 PG_SCHEMA += health_inquiry.SCHEMA + health_partner.SCHEMA
-PG_SCHEMA += writeup.SCHEMA
-SCHEMA_VERSION=b'8'
+PG_SCHEMA += writeup.SCHEMA + answer_support.SCHEMA + learning_metrics.SCHEMA
+SCHEMA_VERSION=b'11'
 def initialize(seed=True):
     global READY
     if PG:
@@ -170,6 +210,7 @@ def initialize(seed=True):
         if seed:seed_demo()
         with conn() as c:
             for m in missions().values():teaching.archive(c,m)
+        with conn() as c:c.execute("INSERT INTO meta VALUES('learning_epoch',?) ON CONFLICT DO NOTHING",(learning_reset.INITIAL,))
         READY=True;return
     DB.parent.mkdir(parents=True,exist_ok=True)
     with conn() as c:
@@ -187,6 +228,8 @@ def initialize(seed=True):
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,uid TEXT NOT NULL,expires REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS session_uid ON sessions(uid);
         CREATE TABLE IF NOT EXISTS login_failures(key TEXT NOT NULL,t REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS textbook_hits(owner TEXT NOT NULL,t REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS textbook_hits_owner ON textbook_hits(owner,t);
         CREATE INDEX IF NOT EXISTS failure_key ON login_failures(key,t);
         CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,owner TEXT NOT NULL,class_id TEXT,created REAL NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL,context TEXT,status TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS report_class ON reports(class_id,created);
@@ -213,8 +256,9 @@ def initialize(seed=True):
         c.execute('CREATE UNIQUE INDEX IF NOT EXISTS account_lookup ON accounts(lookup)')
     with conn() as c:
         for sql in teaching.SCHEMA:c.execute(sql)
-        for sql in health_inquiry.SCHEMA + health_partner.SCHEMA + writeup.SCHEMA:c.execute(sql)
+        for sql in health_inquiry.SCHEMA + health_partner.SCHEMA + writeup.SCHEMA + answer_support.SCHEMA + learning_metrics.SCHEMA:c.execute(sql)
         for m in missions().values():teaching.archive(c,m)
+    with conn() as c:c.execute("INSERT INTO meta VALUES('learning_epoch',?) ON CONFLICT DO NOTHING",(learning_reset.INITIAL,))
     if seed:seed_demo()
     READY=True
 def seed_demo():
@@ -937,8 +981,8 @@ def answer_lines(task):
     if t=='find':return ['찾을 곳: '+', '.join(lab(task['spots'],k) for k in task['keys'])]
     if t=='word':return [f"정답: {task['key']} (초성 {chosung(task['key'])})"]+([f"다른 정답 표기: {', '.join(task['accept'])}"] if task.get('accept') else [])
     if t=='chain':return ['예시 사슬: '+' → '.join([task['start'],*task['key']]),'앞 낱말의 끝 글자로 시작하면 다른 사슬도 정답입니다.']
-    if t=='text':return ['자유롭게 한 문장을 씁니다. 선생님이 확인합니다.']
-    if t=='form':return ['칸을 채워 계획이나 기록을 남깁니다. 선생님이 확인합니다.']
+    if t=='text':return answer_support.teacher_lines(task.get('answerRule'))+['각 묶음에서 한 낱말씩 있으면 정답입니다. 조사와 어미는 채점하지 않습니다.'] if task.get('answerRule') else ['자유롭게 한 문장을 씁니다. 선생님이 확인합니다.']
+    if t=='form':return ['칸을 채워 계획이나 기록을 남깁니다. 선생님이 확인합니다.']+[f['label']+': '+line for f in task.get('fields',[]) for line in answer_support.teacher_lines(f.get('answerRule'))]
     if t=='signal':return ['깜빡임 모양마다 서로 다른 뜻을 정해 약속표를 만들고 신호를 보냅니다.' if task.get('rule')=='send' else '받은 깜빡임을 약속표에서 찾아 뜻을 고릅니다.']
     if t=='grid':return [f"{r['label']}: 꼭 고를 것 "+', '.join(lab(task['cols'],c) for c in task['key'][r['id']]['core'])+(' / 함께 골라도 되는 것 '+', '.join(lab(task['cols'],c) for c in task['key'][r['id']]['ok'] if c not in task['key'][r['id']]['core']) if set(task['key'][r['id']]['ok'])-set(task['key'][r['id']]['core']) else '') for r in task['rows']]
     if t=='number':
@@ -1055,22 +1099,63 @@ def missions():
             if m['id'] in inquiries:m['inquiry']=inquiries[m['id']]
         _MISSIONS.update(stamp=stamp,data=data)
     return _MISSIONS['data']
-SECRET_KEYS={'key','keys','rule','accept','explain','observed'}
+SECRET_KEYS={'key','keys','rule','accept','explain','observed','answerRule','answerRules'}
 CHOSUNG='ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
 def chosung(word):
     # 초성 맞히기: 한글 음절은 초성으로, 띄어쓰기는 그대로 둔다
     return ''.join(CHOSUNG[(ord(c)-0xAC00)//588] if '가'<=c<='힣' else c for c in word)
 def norm_word(s):return re.sub(r'[^0-9A-Za-z가-힣]','',str(s))
+# Display repairs verified against the saved pre-repair source. This does not
+# alter archived questions, answers, fingerprints, or grading edition selection.
+DISPLAY_REPAIRS={
+    ('R1-G04','T17'):('e11519fdf21ad9c12cd514e0526ca0500fb95b2c5f8aa7a54e6e9f9b23354f58',{'note'}),
+    ('R1-G04','T26'):('04b63a065d13a42e12e17fb90bafdb6a091df35e1b77d6c97ac60aae28fd3fed',{'component','mode'}),
+    ('R1-G04','T27'):('cef849e843ffa97779345800f63527800f9a2d5d028eb37fcb106a70f741df9d',{'component','mode'}),
+    ('R1-G06','T15'):('750a723d801796e8142a86a90fd2e11d53295559ed75828107bbe0a2bf51ed6a',{'component','mode'}),
+    ('R2-G12','T08'):('61ffb46a33955582f316b2e4f9763d83977eb53c1392743fdf2dab58273b0c13',{'component','mode'}),
+}
 def public_mission(m):
     def strip(v):
         if isinstance(v,dict):return {k:strip(x) for k,x in v.items() if k not in SECRET_KEYS}
         if isinstance(v,list):return [strip(x) for x in v]
         return v
     out=strip(m)
+    current=missions().get(m['id'],m)
+    current_tasks={t['id']:t for t in current.get('tasks',[])}
+    support_file=ROOT/'data'/'task-support.json'
+    support=json.loads(support_file.read_text(encoding='utf-8')).get('missions',{}).get(m['id'],{}) if support_file.exists() else {}
     for t,o in zip(m.get('tasks',[]),out.get('tasks',[])):
         if t.get('type')=='word':o['pattern']=chosung(t['key'])
         if t.get('type')=='chain':o['links']=len(t['key'])
+        same=current_tasks.get(t['id'])
+        active=same if same and answer_support.fingerprint(same)==answer_support.fingerprint(t) else t
+        if answer_support.supports(active):
+            o['answerSupport']=True
+            o['answerRevision']=teaching.revision(current if active is same else m)
+            for f,of in zip(active.get('fields',[]),o.get('fields',[])):
+                if answer_support.branches(f.get('answerRule')):of['answerSupport']=True
+        guide=support.get('tasks',{}).get(t['id'],{})
+        repair=DISPLAY_REPAIRS.get((m['id'],t['id'])); compatible=False
+        if repair and same and answer_support.fingerprint(t)==repair[0]:
+            # Future question changes cannot silently inherit this exception.
+            compatible=answer_support.fingerprint({k:v for k,v in t.items() if k not in repair[1]})==answer_support.fingerprint({k:v for k,v in same.items() if k not in repair[1]})
+            if compatible:
+                for key in repair[1]:
+                    if key in same:o[key]=strip(same[key])
+        if guide.get('taskFingerprint')==answer_support.fingerprint(t) or compatible and guide.get('taskFingerprint')==answer_support.fingerprint(same):
+            o['support']={k:v for k,v in guide.items() if k!='taskFingerprint'}
+            if 'sources' in o['support']:
+                o['support']['sources']=[{k:v for k,v in source.items() if k in {'title','page'}} for source in guide['sources']]
     return out
+
+def answer_task(m,task,revision,db):
+    """내용이 같은 문항의 새 핵심어 규칙만 명시한 판으로 적용한다. 기록 원문은 바꾸지 않는다."""
+    if not revision:return task
+    if not isinstance(revision,str) or not re.fullmatch('[0-9a-f]{64}',revision):raise ValueError('답 확인 자료를 다시 열어 주세요.')
+    edition=teaching.resolve(db,missions(),m['id'],revision)
+    fresh=next((t for t in (edition or {}).get('tasks',[]) if t['id']==task['id']),None)
+    if not fresh or answer_support.fingerprint(fresh)!=answer_support.fingerprint(task):raise ValueError('문항 내용이 달라졌어요. 의뢰를 다시 열어 주세요.')
+    return fresh
 def teaching_catalog():
     out=dict(missions())
     for gid,quest,place,zone,kind in CUSTOM_GAMES:
@@ -1080,7 +1165,7 @@ def teaching_catalog():
 def mission_summary(m):
     # 퀘스트 수첩의 단계는 필수 과제만 센다. 선택 과제(더 해보기)는 extraIds로 따로 준다.
     req=[t for t in m['tasks'] if not (t.get('optional') or t.get('required') is False)]
-    return {'id':m['id'],'title':m['title'],'quest':m['quest'],'place':m['place'],'zone':m['zone'],'goal':m['goal'],'steps':[s['title'] for s in req],'taskIds':[s['id'] for s in req],'extraIds':[s['id'] for s in m['tasks'] if s not in req],'wrap':m.get('wrap',[])}
+    return {'id':m['id'],'title':m['title'],'quest':m['quest'],'place':m['place'],'zone':m['zone'],'goal':m['goal'],'steps':[s['title'] for s in req],'taskIds':[s['id'] for s in req],'extraIds':[s['id'] for s in m['tasks'] if s not in req],'wrap':m.get('wrap',[]),'solved':(m.get('finish') or {}).get('title','')}
 def judge_mission(m,task,p):
     """과제 종류별로 응답을 확인하고 correct(충족 후보)와 diagnosticCorrect(진단)를 정한다."""
     kind=task['type'];a=p.get('answer','');roles=p.get('roles',{});out={}
@@ -1115,7 +1200,7 @@ def judge_mission(m,task,p):
         out['correct']=got==set(task['keys'])
     elif kind=='word':
         if not norm_word(a):raise ValueError('낱말을 적어 주세요.')
-        out['correct']=norm_word(a) in {norm_word(task['key']),*[norm_word(x) for x in task.get('accept',[])]}
+        out.update(answer_support.check(a,answer_support.word_rule(task)))
     elif kind=='chain':
         got=[x for x in a.split(',') if x]
         if not got or len(got)>len(task['pool']) or set(got)-set(task['pool']) or len(set(got))!=len(got):raise ValueError('카드 꾸러미의 낱말로 사슬을 이어 주세요.')
@@ -1123,6 +1208,7 @@ def judge_mission(m,task,p):
     elif kind=='text':
         if not a.strip() or len(a)>300:raise ValueError('내 생각을 한 문장 남겨 주세요.')
         out['review']='teacher_pending'
+        out.update(answer_support.check(a,task.get('answerRule')) or {})
     elif kind=='action':
         if a not in task['options']:raise ValueError('허용되지 않은 조작')
         if task.get('keys') is not None:out['correct']=a in task['keys']
@@ -1136,8 +1222,12 @@ def judge_mission(m,task,p):
         out['correct']=all(chosen[r]&set(task['key'][r]['core']) and chosen[r]<=set(task['key'][r]['ok']) for r in rows)
     elif kind=='report':
         e=m.get('dex',{}).get(roles.get('product'))
-        if not e or roles.get('product') not in task['products'] or not roles.get('prop') or not roles.get('source') or len(a.strip())<5:raise ValueError('조사서의 칸을 모두 채워 주세요. 편리한 점은 한 문장 이상 써 주세요.')
+        rule=answer_support.rule_for(task,roles)
+        if not e or roles.get('product') not in task['products'] or not roles.get('prop') or not roles.get('source') or len(a.strip())<(1 if rule else 5):raise ValueError('조사서의 칸을 모두 채워 주세요. 편리한 점을 써 주세요.')
         out['correct']=roles['prop'] in e.get('keys',[]) and roles['source']==e.get('source');out['review']='teacher_pending'
+        graded=answer_support.check(a,rule)
+        if graded:
+            selected=out['correct'];out.update(graded);out['correct']=selected and graded['correct']
     elif kind=='plan':
         if roles.get('place') not in [o['id'] for o in task['places']] or roles.get('period') not in [o['id'] for o in task['periods']]:raise ValueError('장소와 기간을 골라 주세요.')
         chosen=[x for x in roles.get('rules','').split(',') if x]
@@ -1145,11 +1235,18 @@ def judge_mission(m,task,p):
         kinds={task['keys'][x] for x in chosen}
         out['correct']={'eff','safe'}<=kinds;out['review']='teacher_pending'
     elif kind=='form':
+        fields={}
         for f in task['fields']:
             v=roles.get(f['id'],'')
             if f.get('required',True) and not v.strip():raise ValueError(f"'{f['label']}' 칸을 채워 주세요.")
             if f['kind']=='select' and v and v not in [o['id'] for o in f['options']]:raise ValueError('보기에 없는 응답')
+            checked=answer_support.check(v,f.get('answerRule'))
+            if checked:fields[f['id']]=checked
         out['review']='teacher_pending'
+        if fields:
+            out.update(correct=all(x['correct'] for x in fields.values()),evaluation='core_keywords',answerRuleVersion=1,
+                       answerCheck={'fields':{k:v['answerCheck'] for k,v in fields.items()}},
+                       answerFeedback='핵심 내용이 맞아요.' if all(x['correct'] for x in fields.values()) else '핵심 내용을 더 적을 칸을 살펴보세요. 어려우면 초성 힌트를 눌러 보세요.')
     elif kind=='number' and task.get('fields'):
         try:vals={f['id']:float(str(roles[f['id']]).replace(',','.')) for f in task['fields']}
         except (KeyError,ValueError):raise ValueError('칸마다 숫자로 입력해 주세요.')
@@ -1164,7 +1261,12 @@ def judge_mission(m,task,p):
 def mission_wrong(task,a,roles,m=None):
     # 다시 살펴볼 카드와 빈칸. 정답은 알려 주지 않고 어디를 다시 볼지만 돌려준다.
     kind=task['type']
+    if kind=='form':return [f['id'] for f in task.get('fields',[]) if (answer_support.check(roles.get(f['id'],''),f.get('answerRule')) or {}).get('correct') is False]
+    if kind=='text':return ['answer'] if (answer_support.check(a,task.get('answerRule')) or {}).get('correct') is False else []
     if kind in ('sort','fill'):return [k for k,v in task.get('key',{}).items() if roles.get(k)!=v]
+    if kind=='multi' and task.get('keys'):
+        # 어느 보기인지는 알려 주지 않고, 더 골라야 하는지(more), 빼야 할 것이 섞였는지(extra)만 알려 준다
+        got={x for x in a.split(',') if x};keys=set(task['keys']);return (['extra'] if got-keys else [])+(['more'] if keys-got else [])
     if kind=='number' and task.get('fields'):
         def off(f):
             try:return abs(float(str(roles.get(f['id'])).replace(',','.'))-float(f['key']))>float(f.get('tol',0))
@@ -1176,7 +1278,7 @@ def mission_wrong(task,a,roles,m=None):
         kinds={task['keys'].get(x) for x in roles.get('rules','').split(',') if x};return [] if {'eff','safe'}<=kinds else ['rules']
     if kind=='grid':return [r for r,v in roles.items() if not ({x for x in v.split(',') if x}&set(task['key'].get(r,{}).get('core',[])) and {x for x in v.split(',') if x}<=set(task['key'].get(r,{}).get('ok',[])))]
     if kind=='report':
-        e=m.get('dex',{}).get(roles.get('product'),{});return [k for k,ok in [('prop',roles.get('prop') in e.get('keys',[])),('source',roles.get('source')==e.get('source'))] if not ok]
+        e=m.get('dex',{}).get(roles.get('product'),{});return [k for k,ok in [('prop',roles.get('prop') in e.get('keys',[])),('source',roles.get('source')==e.get('source')),('answer',(answer_support.check(a,answer_support.rule_for(task,roles)) or {}).get('correct') is not False)] if not ok]
     if kind=='find':got=set(x for x in a.split(',') if x);return sorted(got-set(task['keys']))+['missing']*len(set(task['keys'])-got)
     if kind=='chain':
         seq=[task['start'],*[x for x in a.split(',') if x]]
@@ -1222,6 +1324,13 @@ def writeup_event(p,db=None):
         with conn() as c:item,rev=writeup.resolve(c,ROOT,gid,rev)
     m=missions()[gid]
     return {**{k:p[k] for k in ('runId','sequence','hint','gameVersion') if k in p},**writeup.evaluate(item,rev,m.get('inquiry'),gid,m['title'],p)}
+
+def closure_check(p,gid,text,db=None,required=False):
+    if p.get('ruleRevision') is None:
+        if required:raise ValueError('설명 확인 자료를 다시 열어 주세요.')
+        return {}
+    if db is not None:return answer_support.custom_check(ROOT,db,gid,p['ruleRevision'],text)
+    with conn() as c:return answer_support.custom_check(ROOT,c,gid,p['ruleRevision'],text)
 def validate_event(e, db=None):
     if not isinstance(e,dict) or set(e)-{'id','kind','task','occurred','payload'}:raise ValueError('기록 형식이 올바르지 않습니다.')
     if not isinstance(e.get('id'),str) or not 8<=len(e['id'])<=80:raise ValueError('기록 ID를 확인해 주세요.')
@@ -1234,13 +1343,24 @@ def validate_event(e, db=None):
         if t!='writeup' or not isinstance(p,dict) or not p.get('runId') or not isinstance(e.get('occurred'),str) or len(e['occurred'])>40:raise ValueError('설명 기록 오류')
         return writeup_event(p,db)
     if t=='writeup':raise ValueError('설명 기록 오류')
-    allowed={'rows','resourceId','roles','marked','evidence','caseId','inspected','assembly','answer','reason','hint','card','battery','connection','bulbs','model','runId','gameVersion','contentRevision','sequence','revision','gameId','taskId'}
+    if k=='answer.submitted':
+        if t!='answer' or not isinstance(p,dict) or set(p)-{'gameId','taskId','answer','ruleRevision','runId','gameVersion','sequence','hint'} or p.get('taskId')!='CLOSURE' or not isinstance(p.get('runId'),str) or not 1<=len(p['runId'])<=80 or type(p.get('sequence',0)) is not int or type(p.get('hint',0)) is not int or not 0<=p.get('hint',0)<=3 or not isinstance(e.get('occurred'),str) or len(e['occurred'])>40 or len(json.dumps(p,ensure_ascii=False))>2500:raise ValueError('설명 기록을 확인해 주세요.')
+        grade=closure_check(p,p.get('gameId'),p.get('answer'),db,True)
+        return {**p,**grade,'taskId':p['gameId']+'.CLOSURE','responseText':p['answer'],'review':'teacher_pending','modality':'student_explanation'}
+    if t=='answer':raise ValueError('설명 기록 오류')
+    allowed={'rows','resourceId','roles','marked','evidence','caseId','inspected','assembly','answer','reason','hint','card','battery','connection','bulbs','model','runId','gameVersion','contentRevision','answerRevision','ruleRevision','sequence','revision','gameId','taskId'}
     if not isinstance(p,dict) or set(p)-allowed:raise ValueError('허용되지 않은 기록 항목입니다.')
     if len(json.dumps(p,ensure_ascii=False))>2500:raise ValueError('기록이 너무 깁니다.')
     for key in ['answer','reason','card','connection','bulbs','runId','gameVersion']:
         if key in p and (not isinstance(p[key],str) or len(p[key])>500):raise ValueError('입력 길이를 확인해 주세요.')
     if type(p.get('hint',0)) is not int or not 0<=p.get('hint',0)<=3:raise ValueError('힌트 단계 오류')
     if not isinstance(e.get('occurred'),str) or len(e['occurred'])>40:raise ValueError('기록 시각 오류')
+    if k in PACE_EVENTS:
+        if t!='pace' or set(p)-{'gameId','answer','runId','gameVersion','sequence','hint'} or p.get('answer') not in PACES or not isinstance(p.get('runId'),str) or not 1<=len(p['runId'])<=80:raise ValueError('길 기록 오류')
+        if k=='pace.entered' and p.get('gameId') not in teaching_catalog():raise ValueError('없는 의뢰입니다.')
+        if k=='pace.chosen' and 'gameId' in p:raise ValueError('길 기록 오류')
+        return dict(p)
+    if t=='pace':raise ValueError('길 기록 오류')
     if k in inquiry.EVENTS:
         if t!='discovery' or set(p)-{'gameId','answer','reason','roles','runId','gameVersion','contentRevision','sequence','hint'} or not p.get('runId'):raise ValueError('탐구 기록 오류')
         rev=p.get('contentRevision')
@@ -1262,7 +1382,7 @@ def validate_event(e, db=None):
         if m is None:return {**p,'evaluation':'version_unavailable','taskId':gid+'.'+str(p.get('taskId') or 'TRANSFER'),'originalKind':k}
         return {**p,**poe_evaluate(m,k,p)}
     if k in MISSION_EVENTS:
-        if t!='mission' or set(p)-{'gameId','taskId','answer','roles','hint','runId','gameVersion','contentRevision','sequence'} or not p.get('runId'):raise ValueError('미션 기록 오류')
+        if t!='mission' or set(p)-{'gameId','taskId','answer','roles','hint','runId','gameVersion','contentRevision','answerRevision','sequence'} or not p.get('runId'):raise ValueError('미션 기록 오류')
         catalog=missions();gid=p.get('gameId');rev=p.get('contentRevision')
         if gid not in catalog:raise ValueError('없는 미션입니다.')
         if rev is not None and (not isinstance(rev,str) or not re.fullmatch('[0-9a-f]{64}',rev)):raise ValueError('과제 기록 오류')
@@ -1280,14 +1400,17 @@ def validate_event(e, db=None):
             result.update(taskId=m['id']+'.END',taskTitle='의뢰 마무리',review='teacher_pending');return result
         task=next((x for x in m['tasks'] if x['id']==p.get('taskId')),None)
         if not task:raise ValueError('없는 과제입니다.')
+        if db is not None:task=answer_task(m,task,p.get('answerRevision'),db)
+        else:
+            with conn() as c:task=answer_task(m,task,p.get('answerRevision'),c)
         result.update(taskId=m['id']+'.'+task['id'],taskTitle=task['title'],responseText=teaching.response_text(task,p),elementIds=task.get('elements',[]))
         if k=='mission.hint':
-            if p.get('answer')!='help':raise ValueError('도움 기록 오류')
+            if p.get('answer') not in {'help','initials'}:raise ValueError('도움 기록 오류')
             return result
         result.update(judge_mission(m,task,p));return result
     if t=='mission':raise ValueError('미션 과제 오류')
     if k in CRANE_EVENTS:
-        if t!='crane' or set(p)-{'answer','hint','runId','gameVersion','sequence','roles','battery','card'} or not p.get('runId'):raise ValueError('크레인 기록 오류')
+        if t!='crane' or set(p)-{'answer','hint','runId','gameVersion','sequence','roles','battery','card','ruleRevision'} or not p.get('runId'):raise ValueError('크레인 기록 오류')
         roles=p.get('roles',{})
         if not isinstance(roles,dict) or len(roles)>10 or any(not isinstance(v,str) or len(v)>40 for v in roles.values()):raise ValueError('크레인 선택 오류')
         task,elements=CRANE_TASKS.get(k,('T03',['3-108']))
@@ -1310,12 +1433,17 @@ def validate_event(e, db=None):
         if k=='crane.reversed':result['correct']=a=='pole'
         if k=='crane.compared':result['correct']=a=='false' and all(roles.get(key)==v for key,v in CRANE_TABLE.items())
         if k=='crane.evidence':result['correct']=roles.get('force')=='count' and roles.get('pole')=='compass' and roles.get('deep')=='no'
-        if k=='crane.completed':result['review']='teacher_pending'
+        if k=='crane.completed':
+            grade=closure_check(p,'R3-G07',a,db)
+            if grade.get('correct') is False:raise ValueError(grade['answerFeedback'])
+            result.update(grade);result['review']='teacher_pending'
         return result
     if t=='crane':raise ValueError('크레인 과제 오류')
     if k=='magnet.completed':
-        if t!='closure6' or set(p)-{'reason','answer','hint','runId','gameVersion','sequence'} or not p.get('runId') or any(not p.get(v,'').strip() or len(p[v])>300 for v in ['reason','answer']):raise ValueError('제작 설명과 다음 질문 필요')
-        return {**p,'gameId':'R3-G06','gameVersion':'g06-closure-1','taskId':'R3-G06.T10','elementIds':['3-107','3-129'],'standardCodes':['6과15-03'],'modality':'simulation','explanationReview':'teacher_pending','targetGameId':'R3-G07'}
+        if t!='closure6' or set(p)-{'reason','answer','hint','runId','gameVersion','sequence','ruleRevision'} or not p.get('runId') or any(not p.get(v,'').strip() or len(p[v])>300 for v in ['reason','answer']):raise ValueError('제작 설명과 다음 질문 필요')
+        grade=closure_check(p,'R3-G06',p['reason'],db)
+        if grade.get('correct') is False:raise ValueError(grade['answerFeedback'])
+        return {**p,**grade,'gameId':'R3-G06','gameVersion':'g06-closure-1','taskId':'R3-G06.T10','elementIds':['3-107','3-129'],'standardCodes':['6과15-03'],'modality':'simulation','explanationReview':'teacher_pending','targetGameId':'R3-G07'}
     if t=='closure6':raise ValueError('제작 설명 과제 오류')
     if k in INTRO_MAGNET_EVENTS:
         if t!='magnetIntro' or set(p)-{'answer','reason','hint','runId','gameVersion','sequence'} or not p.get('runId'):raise ValueError('공방 도입 기록 오류')
@@ -1374,8 +1502,10 @@ def validate_event(e, db=None):
         return result
     if t=='magnet':raise ValueError('전자석 과제 오류')
     if k=='workshop.completed':
-        if t!='closure5' or set(p)-{'answer','reason','runId','gameVersion','sequence','hint'} or not p.get('runId') or any(not p.get(v,'').strip() or len(p[v])>300 for v in ['answer','reason']):raise ValueError('마무리 설명과 질문 필요')
-        return {**p,'gameId':'R3-G05','gameVersion':'g05-closure-1','taskId':'R3-G05.T10','elementIds':['3-089','3-090','3-095'],'standardCodes':['6과15-02'],'modality':'simulation','explanationReview':'teacher_pending','targetGameId':'R3-G06'}
+        if t!='closure5' or set(p)-{'answer','reason','runId','gameVersion','sequence','hint','ruleRevision'} or not p.get('runId') or any(not p.get(v,'').strip() or len(p[v])>300 for v in ['answer','reason']):raise ValueError('마무리 설명과 질문 필요')
+        grade=closure_check(p,'R3-G05',p['reason'],db)
+        if grade.get('correct') is False:raise ValueError(grade['answerFeedback'])
+        return {**p,**grade,'gameId':'R3-G05','gameVersion':'g05-closure-1','taskId':'R3-G05.T10','elementIds':['3-089','3-090','3-095'],'standardCodes':['6과15-02'],'modality':'simulation','explanationReview':'teacher_pending','targetGameId':'R3-G06'}
     if t=='closure5':raise ValueError('마무리 과제 오류')
     if k in INQUIRY_EVENTS:
         if t!='inquiry5' or set(p)-{'answer','reason','roles','hint','runId','gameVersion','sequence'} or not p.get('runId'):raise ValueError('새 조사 기록 오류')
@@ -1562,10 +1692,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.client_address[0]
     def cookie(self,token,age):return f'science_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={age}'+('; Secure' if PUBLIC else '')
     def do_GET(self):
+        token=REQUEST_LEARNING_EPOCH.set(None)
         try:return self.get_route()
+        except learning_reset.ResetRequired as e:return self.send_json(409,{'error':str(e),'code':'learning_reset','learningEpoch':e.epoch})
         except Exception:
             import traceback;traceback.print_exc()
             return self.send_json(500,{'error':'잠시 뒤 다시 시도해 주세요.'})
+        finally:REQUEST_LEARNING_EPOCH.reset(token)
     def get_route(self):
         if not self.valid_host():return self.send_json(403,{'error':'선생님이 알려 준 주소로 접속해 주세요.' if LAN else '로컬 개발 주소로 접속해 주세요.'})
         path=urlparse(self.path).path
@@ -1577,7 +1710,14 @@ class Handler(BaseHTTPRequestHandler):
             u=self.user()
             if not u:return self.send_json(401,{'error':'다시 접속해 주세요.'})
             if path=='/api/me':return self.send_json(200,u)
+            if u['role']=='student' and path=='/api/health-inquiry':REQUEST_LEARNING_EPOCH.set(self.headers.get('X-Science-Learning-Epoch','0'))
             query=parse_qs(urlparse(self.path).query)
+            if path=='/api/teaching/dashboard':
+                try:
+                    with conn() as c:result=learning_metrics.dashboard(c,u,{k:v[0] for k,v in query.items()},teaching_catalog(),TEST_NUMBER,GUEST_CLASS)
+                    return self.send_json(200,result)
+                except PermissionError as e:return self.send_json(403,{'error':str(e)})
+                except ValueError as e:return self.send_json(400,{'error':str(e)})
             if path=='/api/health-inquiry':
                 try:
                     with conn() as c:result=health_inquiry.view(c,u,query.get('runId',[''])[0])
@@ -1715,11 +1855,31 @@ class Handler(BaseHTTPRequestHandler):
                 with conn() as c:events=dex_events(c,u['id'])
                 return self.send_json(200,dex_view(*run_progress(events,run),game=game or None))
             if path=='/api/missions':return self.send_json(200,{'missions':[mission_summary(m) for m in missions().values()]})
+            # 교과서 펼쳐 보기: 출판사 저작물이라 둘러보기 계정에는 주지 않고, 의뢰에 연결된 쪽만 준다(textbook.py)
+            if path=='/api/textbook':
+                if u.get('guest'):return self.send_json(403,{'error':textbook.GUEST})
+                data=textbook.sections(ROOT,query.get('mission',[''])[0])
+                return self.send_json(200,data) if data else self.send_json(404,{'error':'의뢰를 확인해 주세요.'})
+            if path=='/api/textbook-page':
+                if u.get('guest'):return self.send_json(403,{'error':textbook.GUEST})
+                raw=textbook.page(ROOT,query.get('book',[''])[0],query.get('page',[''])[0])
+                if raw is None:return self.send_json(404,{'error':'교과서 쪽을 찾을 수 없어요.'})
+                if u['role']=='student': # 학생 코드 하나로 교과서 전체를 차례로 받아 가지 못하게 학생마다 받는 쪽 수를 제한한다(선생님은 제한 없음)
+                    now=time.time()
+                    with conn() as c:
+                        c.execute('DELETE FROM textbook_hits WHERE owner=? AND t<?',(u['id'],now-86400))
+                        day=c.execute('SELECT COUNT(*) FROM textbook_hits WHERE owner=?',(u['id'],)).fetchone()[0]
+                        hour=c.execute('SELECT COUNT(*) FROM textbook_hits WHERE owner=? AND t>?',(u['id'],now-3600)).fetchone()[0]
+                        if day>=TEXTBOOK_DAY:return self.send_json(429,{'error':textbook.DAY_LIMIT})
+                        if hour>=TEXTBOOK_HOUR:return self.send_json(429,{'error':textbook.HOUR_LIMIT})
+                        c.execute('INSERT INTO textbook_hits VALUES(?,?)',(u['id'],now))
+                self.send_response(200);self.send_header('Content-Type','image/webp');self.send_header('Cache-Control','no-store');self.send_header('Pragma','no-cache');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
             if path=='/api/mission':
                 with conn() as c:
                     m=teaching.resolve(c,missions(),query.get('id',[''])[0],query.get('revision',[None])[0])
                     if not m:return self.send_json(404,{'error':'과제 원본을 찾을 수 없습니다. 선생님께 알려 주세요.'})
                     rev=teaching.archive(c,m)
+                    if m['id'] in missions():teaching.archive(c,missions()[m['id']])
                 return self.send_json(200,{**public_mission(m),'contentRevision':rev})
             if path=='/api/magnet-progress':
                 if u['role']!='student':return self.send_json(403,{'error':'학생 의뢰입니다.'})
@@ -1741,8 +1901,10 @@ class Handler(BaseHTTPRequestHandler):
                 questions=[e['payload'].get('answer','') for e in events if e['kind']=='question.submitted' and e['payload'].get('answer')]
                 return self.send_json(200,{'handoff':{'question':questions[-1],'source':'관리실 빛 자물쇠','destination':'가린 회로 추리','received':any(e['kind']=='quest.received' for e in events)} if completed and questions else None})
             if path=='/api/state':
-                with conn() as c:row=c.execute('SELECT * FROM checkpoints WHERE owner=?',(u['id'],)).fetchone()
-                return self.send_json(200,{'revision':row['revision'] if row else 0,'state':json.loads(row['state']) if row else None})
+                with conn() as c:
+                    current=learning_reset.status(c,' FOR SHARE' if PG else '')
+                    row=c.execute('SELECT * FROM checkpoints WHERE owner=?',(u['id'],)).fetchone()
+                return self.send_json(200,{'revision':row['revision'] if row else 0,'state':json.loads(row['state']) if row else None,'learningEpoch':current['epoch']})
             if path.startswith('/api/files/'):
                 fid=path.rsplit('/',1)[-1]
                 with conn() as c:
@@ -1786,7 +1948,7 @@ class Handler(BaseHTTPRequestHandler):
         file=(ROOT/'public'/('index.html' if path=='/' else 'admin.html' if path in ('/admin','/admin/') else path.lstrip('/'))).resolve()
         if not file.is_relative_to((ROOT/'public').resolve()) or not file.is_file():return self.send_json(404,{'error':'파일이 없습니다.'})
         raw=file.read_bytes();mime='text/javascript' if file.suffix=='.mjs' else mimetypes.guess_type(str(file))[0] or 'application/octet-stream'
-        self.send_response(200);self.send_header('Content-Type',mime+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-cache');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'none'; object-src 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
+        self.send_response(200);self.send_header('Content-Type',mime+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-cache');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'none'; object-src 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
     def admin_post(self,u,path,data):
         # 교사는 자기 학급만, 관리자는 모든 학급. 학생 기록은 지우지 않고 비활성화만 한다.
         if u['role'] not in ('teacher','admin'):return self.send_json(403,{'error':'선생님 권한이 필요합니다.'})
@@ -1988,6 +2150,10 @@ class Handler(BaseHTTPRequestHandler):
             return {'ok':True}
         return None
     def do_POST(self):
+        token=REQUEST_LEARNING_EPOCH.set(None)
+        try:return self.post_route()
+        finally:REQUEST_LEARNING_EPOCH.reset(token)
+    def post_route(self):
         if not self.valid_host() or self.headers.get('X-Science-Client')!='local-v1' or not origin_allowed(self.headers.get('Origin'),self.headers.get('Host')):return self.send_json(403,{'error':'허용되지 않은 요청입니다.'})
         try:
             length=int(self.headers.get('Content-Length',0))
@@ -2050,6 +2216,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200,public_user(found),{'Set-Cookie':self.cookie(token,SESSION_SECONDS)})
             u=self.user()
             if not u:return self.send_json(401,{'error':'다시 접속해 주세요.'})
+            if u['role']=='student' and path not in {'/api/logout','/api/avatar','/api/nickname'}:
+                REQUEST_LEARNING_EPOCH.set(self.headers.get('X-Science-Learning-Epoch','0'))
+                with conn():pass
+            if path=='/api/nickname':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 계정에서 바꿀 수 있어요.'})
+                if set(data)!={'nickname'}:raise Invalid('닉네임만 바꿀 수 있어요.')
+                nickname=clean_nickname(data['nickname'])
+                with conn() as c:
+                    c.execute('UPDATE accounts SET nickname=? WHERE id=?',(nickname,u['id']))
+                    changed=c.execute('SELECT * FROM accounts WHERE id=?',(u['id'],)).fetchone()
+                return self.send_json(200,public_user(changed))
+            if path in {'/api/activity-pulse','/api/activity-error'}:
+                try:
+                    with conn() as c:result=(learning_metrics.pulse if path.endswith('pulse') else learning_metrics.error)(c,u,data,teaching_catalog())
+                    return self.send_json(200,result)
+                except PermissionError as e:return self.send_json(403,{'error':str(e)})
+                except ValueError as e:return self.send_json(400,{'error':str(e)})
             if path in ('/api/health-inquiry/action','/api/health-inquiry/partner'):
                 try:
                     if path.endswith('/action'):
@@ -2229,7 +2412,43 @@ class Handler(BaseHTTPRequestHandler):
                 try:r=writeup_event(p)
                 except Invalid:raise
                 except ValueError as e:return self.send_json(400,{'error':str(e)})
-                return self.send_json(200,{k:r[k] for k in ('terms','evidence','evidenceDropped','itemMissing','version','mode')})
+                return self.send_json(200,{k:r[k] for k in ('terms','evidence','evidenceDropped','itemMissing','version','mode','correct','evaluation','answerCheck','answerFeedback','answerRuleVersion') if k in r})
+            if path=='/api/answer-check':
+                if set(data)-{'gameId','taskId','answer','ruleRevision'} or data.get('taskId')!='CLOSURE':raise ValueError('답을 확인할 설명 문항이 아닙니다.')
+                with conn() as c:result=answer_support.custom_check(ROOT,c,data.get('gameId'),data.get('ruleRevision'),data.get('answer'))
+                return self.send_json(200,result)
+            if path=='/api/answer-hint':
+                if set(data)-{'gameId','taskId','contentRevision','answerRevision','gameVersion','itemRevision','fieldId','product','ruleRevision'}:raise ValueError('도움 요청을 확인해 주세요.')
+                gid=data.get('gameId');tid=data.get('taskId')
+                if not isinstance(gid,str) or not isinstance(tid,str) or gid not in teaching_catalog():raise ValueError('도움받을 의뢰를 확인해 주세요.')
+                extra={}
+                with conn() as c:
+                    if tid=='CLOSURE':
+                        item,rev=answer_support.custom(ROOT,c,gid,data.get('ruleRevision'))
+                        result=answer_support.hints(item['answerRule']);extra['ruleRevision']=rev
+                    elif tid in {'WRITEUP',gid+'.WRITEUP'}:
+                        rev=data.get('itemRevision')
+                        if rev is not None and (not isinstance(rev,str) or not re.fullmatch('[0-9a-f]{64}',rev)):raise ValueError('설명 문항 버전을 확인해 주세요.')
+                        item,rev=writeup.resolve(c,ROOT,gid,rev)
+                        if not item:raise ValueError('설명 문항을 다시 열어 주세요.')
+                        result=answer_support.hints(item.get('answerRule'))
+                    else:
+                        m=teaching.resolve(c,missions(),gid,data.get('contentRevision'),data.get('gameVersion'))
+                        task=next((x for x in (m or {}).get('tasks',[]) if x['id']==tid),None)
+                        if not task:raise ValueError('없는 과제입니다.')
+                        task=answer_task(m,task,data.get('answerRevision'),c)
+                        field=data.get('fieldId')
+                        if field is not None and not isinstance(field,str):raise ValueError('도움받을 칸을 확인해 주세요.')
+                        if task['type']=='form':
+                            result=[]
+                            for f in task.get('fields',[]):
+                                if field and field!=f['id']:continue
+                                result.extend({**h,'fieldId':f['id'],'fieldLabel':f['label']} for h in answer_support.hints(f.get('answerRule')))
+                        else:
+                            product=data.get('product')
+                            if product is not None and not isinstance(product,str):raise ValueError('조사할 제품을 확인해 주세요.')
+                            result=answer_support.hints(answer_support.rule_for(task,{'product':product}))
+                return self.send_json(200,{**extra,'hints':result,'message':'초성을 보고 핵심어를 떠올려 보세요. 조사나 문장 끝맺음은 자유롭게 써도 돼요.' if result else '내 관찰과 생각을 자유롭게 적어 주세요.'})
             if path=='/api/poe-check':
                 event={'id':'poe-check-0000','kind':data.get('kind'),'task':'mission','occurred':'check','payload':data.get('payload')}
                 if event['kind'] not in POE_EVENTS:raise ValueError('예상 확인 오류')
@@ -2237,9 +2456,11 @@ class Handler(BaseHTTPRequestHandler):
                 if r.get('evaluation')=='version_unavailable':raise ValueError('의뢰 자료가 바뀌었어요. 의뢰를 다시 열어 주세요.')
                 return self.send_json(200,{k:r[k] for k in ('matched','actualLabel','observed','correct','feedback','evaluation') if k in r})
             if path=='/api/mission-check':
-                with conn() as c:m=teaching.resolve(c,missions(),data.get('gameId'),data.get('contentRevision'),data.get('gameVersion'))
-                task=next((x for x in (m or {}).get('tasks',[]) if x['id']==data.get('taskId')),None)
-                if not task:raise ValueError('없는 과제입니다.')
+                with conn() as c:
+                    m=teaching.resolve(c,missions(),data.get('gameId'),data.get('contentRevision'),data.get('gameVersion'))
+                    task=next((x for x in (m or {}).get('tasks',[]) if x['id']==data.get('taskId')),None)
+                    if not task:raise ValueError('없는 과제입니다.')
+                    task=answer_task(m,task,data.get('answerRevision'),c)
                 roles=data.get('roles',{});answer=data.get('answer','')
                 if not isinstance(roles,dict) or len(roles)>24 or any(not isinstance(v,str) or len(v)>80 or len(str(k))>40 for k,v in roles.items()) or not isinstance(answer,str) or len(answer)>500:raise ValueError('미션 응답 오류')
                 out=judge_mission(m,task,{'answer':answer,'roles':roles})
@@ -2258,7 +2479,7 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             payload=validate_event(event,c)
                             if event['kind']=='mission.completed' and payload.get('evaluation')!='version_unavailable':
-                                m=teaching.resolve(c,missions(),payload['gameId'],payload.get('contentRevision'));need={x['id'] for x in m['tasks'] if not (x.get('optional') or x.get('required') is False) and x['type']!='text'}
+                                m=teaching.resolve(c,missions(),payload['gameId'],payload.get('contentRevision'));need={x['id'] for x in m['tasks'] if not (x.get('optional') or x.get('required') is False) and (x['type']!='text' or x.get('answerRule'))}
                                 done={json.loads(r['payload']).get('taskId','').split('.')[-1] for r in c.execute("SELECT payload FROM events WHERE owner=? AND kind='mission.answered'",(u['id'],)) if json.loads(r['payload']).get('runId')==payload['runId'] and json.loads(r['payload']).get('gameId')==payload['gameId'] and json.loads(r['payload']).get('correct') is not False and json.loads(r['payload']).get('contentRevision',payload['contentRevision'])==payload['contentRevision']}
                                 if need-done:raise ValueError('아직 끝내지 않은 과제가 있어요.')
                             if event['kind'].startswith('crane.') and event['kind'] not in ['crane.scene_released','crane.recalled','crane.hint']:
@@ -2384,7 +2605,11 @@ class Handler(BaseHTTPRequestHandler):
                 if 'runVersion' in state and state['runVersion'] not in ['g04-slice-4','g04-slice-5','g04-slice-6','g04-slice-7','g04-slice-8']:raise ValueError('버전 오류')
                 if 'adventure' in state:
                     a=state['adventure']
-                    if not isinstance(a,dict) or not {'welcomed','tracked'}<=set(a) or set(a)-{'welcomed','tracked','storyItems','wear','seenWear','regionsDone','ended','field','scenes','duels'} or type(a['welcomed'])is not bool or str(a['tracked']) not in state_games():raise ValueError('모험 기록 오류')
+                    if not isinstance(a,dict) or not {'welcomed','tracked'}<=set(a) or set(a)-{'welcomed','tracked','selectedRegion','regionTracks','storyItems','wear','seenWear','regionsDone','ended','field','scenes','duels','pace','paceAt','quickIntro','storyMap'} or type(a['welcomed'])is not bool or str(a['tracked']) not in state_games():raise ValueError('모험 기록 오류')
+                    region_prefix={'farm':'R1-','fire':'R2-','power':'R3-','future':'R4-','life':'R5-'}
+                    if 'selectedRegion' in a and (not isinstance(a['selectedRegion'],str) or a['selectedRegion'] not in region_prefix):raise ValueError('탐험할 지역을 확인해 주세요.')
+                    tracks=a.get('regionTracks',{})
+                    if not isinstance(tracks,dict) or set(tracks)-set(region_prefix) or any(not isinstance(gid,str) or gid not in state_games() or not gid.startswith(region_prefix[region]) for region,gid in tracks.items()):raise ValueError('지역별 의뢰 기록을 확인해 주세요.')
                     items=a.get('storyItems',[])
                     wear,seen,regions=a.get('wear',{}),a.get('seenWear',[]),a.get('regionsDone',[])
                     if not isinstance(wear,dict) or set(wear)-{'head','back','pet'} or any(v not in WEAR_IDS for v in wear.values()):raise ValueError('소품 기록 오류')
@@ -2393,6 +2618,11 @@ class Handler(BaseHTTPRequestHandler):
                     duels=a.get('duels',[])
                     if not isinstance(duels,list) or any(v not in region_codes() for v in duels) or len(set(duels))!=len(duels):raise ValueError('척척 오류 대결 기록 오류')
                     if 'ended' in a and (type(a['ended']) not in (int,float) or a['ended']<0):raise ValueError('엔딩 기록 오류')
+                    # 고른 길(이야기 모두 보기, 빠르게 문제만)과 빠른 길에서 이야기 길로 돌아갈 지도
+                    if 'pace' in a and a['pace'] not in PACES:raise ValueError('고른 길을 확인해 주세요.')
+                    if 'paceAt' in a and (type(a['paceAt']) not in (int,float) or a['paceAt']<0):raise ValueError('고른 길을 확인해 주세요.')
+                    if 'quickIntro' in a and type(a['quickIntro']) is not bool:raise ValueError('고른 길을 확인해 주세요.')
+                    if 'storyMap' in a and a['storyMap'] not in {'hub',*region_keys(),'power-lab',*zone_ids()}:raise ValueError('고른 길을 확인해 주세요.')
                     # 구역 현장 활동(public/field.json): {구역: {on, got: [물건 id], set: {장치 id: 상태 번호}, done}}
                     field=a.get('field',{})
                     if not isinstance(field,dict) or len(field)>len(zone_ids()) or any(str(k) not in zone_ids() or not isinstance(v,dict) or set(v)-{'on','got','set','done','rec'} for k,v in field.items()):raise ValueError('현장 활동 기록 오류')
@@ -2425,10 +2655,10 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(q,dict) or len(q)>len(state_games()) or any(str(k) not in state_games() or not isinstance(v,dict) for k,v in q.items()) or len(json.dumps(q,ensure_ascii=False))>120000:raise ValueError('미션 저장 오류')
                 if 'crane' in state:
                     q=state['crane']
-                    if not isinstance(q,dict) or set(q)-{'released','question','asked','closed','opened','answer','hint','step','recall','battery','counts','strength','compass','poles','reversed','table','claim','delivered','cargo','evidence','reason','picks','done','tableOk','evidenceOk'} or any(k in q and type(q[k]) is not bool for k in ['released','asked','closed','opened','done','tableOk','evidenceOk']) or not isinstance(q.get('question',''),str) or len(q.get('question',''))>300 or q.get('answer','') not in ['','decrease','always','zero'] or type(q.get('hint',0)) is not int or not 0<=q.get('hint',0)<=3 or len(json.dumps(q,ensure_ascii=False))>4000:raise ValueError('크레인 저장 오류')
+                    if not isinstance(q,dict) or set(q)-{'released','question','asked','closed','opened','answer','hint','step','recall','battery','counts','strength','compass','poles','reversed','table','claim','delivered','cargo','evidence','reason','picks','done','tableOk','evidenceOk','ruleRevision','answerHint'} or any(k in q and type(q[k]) is not bool for k in ['released','asked','closed','opened','done','tableOk','evidenceOk']) or not isinstance(q.get('question',''),str) or len(q.get('question',''))>300 or q.get('answer','') not in ['','decrease','always','zero'] or type(q.get('hint',0)) is not int or not 0<=q.get('hint',0)<=3 or len(json.dumps(q,ensure_ascii=False))>4000:raise ValueError('크레인 저장 오류')
                 if 'magnetClosure' in state:
                     q=state['magnetClosure']
-                    if not isinstance(q,dict) or set(q)!={'reason','question'} or any(not isinstance(v,str) or len(v)>300 for v in q.values()):raise ValueError('제작 카드 저장 오류')
+                    if not isinstance(q,dict) or set(q)-{'reason','question','ruleRevision','answerHint'} or not {'reason','question'}<=set(q) or any(not isinstance(q[k],str) or len(q[k])>300 for k in ['reason','question']):raise ValueError('제작 카드 저장 오류')
                 if 'magnetIntro' in state:
                     q=state['magnetIntro']
                     if not isinstance(q,dict) or set(q)!={'comparison','experience','recalled','inspected','candidate','hint'} or q['comparison'] not in ['','same','different','unknown'] or not isinstance(q['experience'],str) or len(q['experience'])>300 or type(q['recalled'])is not bool or not isinstance(q['inspected'],list) or any(v not in ['battery','contact','ends'] for v in q['inspected']) or len(q['inspected'])!=len(set(q['inspected'])) or q['candidate'] not in ['','battery','contact','ends','unknown'] or type(q['hint'])is not int or not 0<=q['hint']<=3:raise ValueError('공방 도입 저장 오류')
@@ -2446,7 +2676,11 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(m,dict) or set(m)!={'checks','safe','tape','turns','tails','ends','connected','ran','opened','answer','hint'} or not isinstance(m['checks'],dict) or set(m['checks'])!={'gloves','ends','power'} or any(type(v)is not bool for v in m['checks'].values()) or any(type(m[k])is not bool for k in ['safe','tape','tails','connected','ran','opened']) or type(m['turns'])is not int or not 0<=m['turns']<=3 or m['ends'] not in ['covered','ends','all'] or m['answer'] not in ['','current','always'] or type(m['hint'])is not int or not 0<=m['hint']<=3:raise ValueError('전자석 저장 오류')
                 if 'workshopClosure' in state:
                     w=state['workshopClosure']
-                    if not isinstance(w,dict) or set(w)!={'reason','question'} or any(not isinstance(w[k],str) or len(w[k])>300 for k in w):raise ValueError('마무리 저장 오류')
+                    if not isinstance(w,dict) or set(w)-{'reason','question','ruleRevision','answerHint'} or not {'reason','question'}<=set(w) or any(not isinstance(w[k],str) or len(w[k])>300 for k in ['reason','question']):raise ValueError('마무리 저장 오류')
+                for draft_name in ['crane','magnetClosure','workshopClosure']:
+                    draft=state.get(draft_name,{})
+                    if 'ruleRevision' in draft and (not isinstance(draft['ruleRevision'],str) or (draft['ruleRevision'] and not re.fullmatch('[0-9a-f]{64}',draft['ruleRevision']))):raise ValueError('설명 확인 자료 저장 오류')
+                    if 'answerHint' in draft and (type(draft['answerHint']) is not int or draft['answerHint'] not in {0,1}):raise ValueError('설명 도움 저장 오류')
                 if 'g05Intro' in state:
                     q=state['g05Intro']
                     if not isinstance(q,dict) or set(q)!={'circuit','reason','reviewed','motor','buzzer','done'} or q['circuit'] not in ['','one','two'] or q['reason'] not in ['','controlled','position'] or any(q[k] not in ['','speed','volume','brightness'] for k in ['motor','buzzer']) or any(type(q[k])is not bool for k in ['reviewed','done']):raise ValueError('새 조사 저장 오류')
@@ -2488,7 +2722,7 @@ class Handler(BaseHTTPRequestHandler):
                     t=state['travel']
                     if not isinstance(t,dict) or set(t)!={'map','positions','visited','notes'}:raise ValueError('지도 저장 오류')
                     maps={'hub',*region_keys(),'power-lab','motor-workshop','buzzer-workshop','deduction-workshop','application-workshop','g05-intro','workshop-summary','magnet-workshop','crane-workshop',*zone_ids()}
-                    if (t['map'] not in maps and str(t['map']).removeprefix('mission:') not in state_games()) or any(not isinstance(t[k],dict) for k in ['positions','visited','notes']):raise ValueError('지도 저장 오류')
+                    if (t['map'] not in maps|{'quick'} and str(t['map']).removeprefix('mission:') not in state_games()) or any(not isinstance(t[k],dict) for k in ['positions','visited','notes']):raise ValueError('지도 저장 오류')
                     if any(not isinstance(v,str) or len(v)>160 for v in t['notes'].values()):raise ValueError('관찰 저장 오류')
                     games=state_games()
                     if set(t['notes'])-games or set(t['visited'])-games or set(t['positions'])-maps-{'hub@2'}:raise ValueError('장소 ID 오류')
@@ -2511,6 +2745,7 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(v,dict) and v.get('done') is True and not u.get('guest'):c.execute('INSERT INTO field_done VALUES(?,?,?,?) ON CONFLICT(owner,zone) DO NOTHING',(u['id'],z,u['class_id'],time.time()))
                 return self.send_json(200,{'revision':current+1})
             return self.send_json(404,{'error':'없는 요청입니다.'})
+        except learning_reset.ResetRequired as e:return self.send_json(409,{'error':str(e),'code':'learning_reset','learningEpoch':e.epoch})
         except PermissionError:return self.send_json(403,{'error':'이 학급을 관리할 권한이 없습니다.'})
         except NotFound:return self.send_json(404,{'error':'찾는 학생이나 학급이 없습니다.'})
         except Invalid as e:return self.send_json(400,{'error':str(e)})

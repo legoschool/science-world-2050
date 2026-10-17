@@ -30,7 +30,7 @@ export function cleanAvatar(av) {
 }
 
 // 옷 색 바꾸기: 캐릭터마다 옷에 쓰인 색 범위(색상 도, 최소 채도, 최소 명도)만 골라 색상을 45도씩 돌린다.
-// 피부·머리·눈은 범위 밖이라 그대로 남는다. tools에서 12종 x 8색 미리보기로 확인한 값이다.
+// 머리의 푸른 하이라이트나 머리띠도 옷과 같은 색일 수 있어, 머리 영역은 색상과 무관하게 보존한다.
 const TINT_RANGES = {1: [[190, 250, .35, .12]], 2: [[342, 360, .6, .4], [0, 5, .6, .4]], 3: [[75, 165, .25, .15]], 4: [[44, 70, .4, .4], [190, 250, .35, .15]], 5: [[245, 305, .25, .15]], 6: [[200, 250, .35, .12]], 7: [[315, 352, .18, .6], [195, 235, .3, .45]], 8: [[200, 255, .3, .1], [345, 360, .5, .3], [0, 6, .5, .3]], 9: [[110, 185, .2, .3]], 10: [[185, 250, .25, .15]], 11: [[75, 165, .25, .12]], 12: [[8, 38, .7, .72]]};
 const tinted = new Map();
 export function tintSheet(sheet, tint, look) {
@@ -40,8 +40,22 @@ export function tintSheet(sheet, tint, look) {
   const c = document.createElement('canvas'); c.width = sheet.width; c.height = sheet.height;
   const x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(sheet, 0, 0);
   const img = x.getImageData(0, 0, c.width, c.height), a = img.data, rot = tint * 45, ranges = TINT_RANGES[look] || [];
+  const meta = sheet.meta;
+  const heads = new Map();
+  if (meta) for (let y0 = 0; y0 < c.height; y0 += meta.fh) for (let x0 = 0; x0 < c.width; x0 += meta.fw) {
+    let top = meta.fh;
+    for (let y = 0; y < meta.fh && top === meta.fh; y++) for (let xx = 0; xx < meta.fw; xx++) {
+      if (a[((y0 + y) * c.width + x0 + xx) * 4 + 3] > 40) { top = y; break; }
+    }
+    heads.set(`${x0},${y0}`, top + 30);
+  }
   for (let i = 0; i < a.length; i += 4) {
     if (a[i + 3] < 10) continue;
+    if (meta) {
+      const px = (i / 4) % c.width, py = Math.floor(i / 4 / c.width);
+      const x0 = Math.floor(px / meta.fw) * meta.fw, y0 = Math.floor(py / meta.fh) * meta.fh;
+      if (py - y0 < heads.get(`${x0},${y0}`)) continue;
+    }
     const r = a[i] / 255, g = a[i + 1] / 255, b = a[i + 2] / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, v = mx, s = mx ? d / mx : 0;
     let h = d === 0 ? 0 : mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
     h = (h * 60 + 360) % 360;
@@ -52,6 +66,7 @@ export function tintSheet(sheet, tint, look) {
   }
   x.putImageData(img, 0, 0);
   c.meta = sheet.meta;
+  c.lookKey = (sheet.lookKey || `look${look}`) + '@' + tint;
   tinted.set(key, c);
   return c;
 }

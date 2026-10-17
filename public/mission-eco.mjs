@@ -212,7 +212,9 @@ export function climateModel({el, button, task = {}, memory = {}, onAction: fire
   function check() {
     const s = stage();
     if (s >= 4) m.hi = true; if (s <= 1) m.lo = true;
-    status.textContent = m.hi && m.lo ? `이산화 탄소가 많을 때와 적을 때를 모두 봤어요. 지금은 ${LEVEL[s]} 단계예요.` : `연소량을 올리고 내리며 네 장면을 비교해 보세요. ${m.hi ? '' : '가장 많을 때'}${!m.hi && !m.lo ? '와 ' : ''}${m.lo ? '' : '적을 때'}를 아직 보지 않았어요.`;
+    // 단계는 세 막대를 함께 본 값이라 막대 하나만 끝까지 밀면 「아주 많음」이 되지 않는다. 그때 바로 알려 준다
+    const oneOnly = !m.hi && Object.values(m.v).some((v) => v >= 4) && s < 4;
+    status.textContent = m.hi && m.lo ? `이산화 탄소가 많을 때와 적을 때를 모두 봤어요. 지금은 ${LEVEL[s]} 단계예요.` : oneOnly ? '막대 하나만으로는 이산화 탄소가 아주 많아지지 않아요. 세 막대를 모두 오른쪽 끝까지 올려 보세요.' : `연소량을 올리고 내리며 네 장면을 비교해 보세요. ${m.hi ? '' : '가장 많을 때'}${!m.hi && !m.lo ? '와 ' : ''}${m.lo ? '' : '적을 때'}를 아직 보지 않았어요.`;
     if (m.hi && m.lo && !fired) { fired = true; onAction('explored'); onReady?.(); }
   }
   tray.append(el('div', {class: 'eco-sliders'}, rows));
@@ -255,7 +257,9 @@ export function virtualSearch({el, button, task = {}, memory = {}, onAction: fir
   }
   function check() {
     const n = m.opened.length;
-    status.textContent = narrowed() && n >= 2 ? `믿을 만한 자료 ${n}개를 읽었어요.` : `${narrowed() ? '검색어를 좁혔어요.' : '주제어를 더해 결과를 좁혀 보세요.'} 믿을 만한 자료 ${n}/2`;
+    // 지금 결과에 더 열 믿을 만한 자료가 없으면 주제어를 더 더하라고 알려 준다(1/2에서 멈추지 않게)
+    const more = results().some((d) => !['unrelated', 'nosource'].includes(d.kind) && !m.opened.includes(d.id));
+    status.textContent = narrowed() && n >= 2 ? `믿을 만한 자료 ${n}개를 읽었어요.` : `${narrowed() ? (more ? '검색어를 좁혔어요.' : '지금 결과에는 더 읽을 믿을 만한 자료가 없어요. 주제어를 하나 더 더하거나 바꿔 보세요.') : '주제어를 더해 결과를 좁혀 보세요.'} 믿을 만한 자료 ${n}/2`;
     if (narrowed() && n >= 2 && !fired) { fired = true; onAction('searched'); onReady?.(); }
   }
   paint();
@@ -448,7 +452,9 @@ export function cardNews({el, button, mode, task = {}, memory = {}, onAction: fi
     grid.replaceChildren(...CN.map((c, i) => cnCard(el, i + 1, c.title, textOf(c, cards[c.id].s), cards[c.id], mode === 'edit' ? editor(c) : fixing === c.id ? editor(c) : '')));
     if (mode === 'edit') {
       const ready = CN.every((c) => cards[c.id].s && imgOk(cards[c.id]));
-      side.replaceChildren(el('p', {class: 'eco-how'}, '척척이 먼저 채워 둔 칸도 있어요. 카드마다 문장과 그림을 고르고, 그림 출처를 채워야 그림이 카드에 들어가요.'));
+      // 카드마다 무엇이 빠졌는지 바로 알려 준다(인터넷 사진은 출처를 알 수 없어 그림을 바꿔야 끝난다)
+      const todo = CN.flatMap((c, i) => { const cur = cards[c.id], n = `카드 ${i + 1}: `; return !cur.s ? [n + '문장을 골라요.'] : !cur.img ? [n + '그림을 골라요.'] : cur.img === 'web' ? [n + '인터넷에서 찾은 사진은 누가 찍었는지 몰라 쓸 수 없어요. 그림을 다른 것으로 바꿔요.'] : !cur.src ? [n + '그림 출처를 골라요.'] : []; });
+      side.replaceChildren(el('p', {class: 'eco-how'}, '척척이 먼저 채워 둔 칸도 있어요. 카드마다 문장과 그림을 고르고, 그림 출처를 채워야 그림이 카드에 들어가요.'), todo.length ? el('ul', {class: 'cn-todo'}, todo.map((x) => el('li', {}, x))) : '');
       status.textContent = ready ? '카드 네 장을 모두 만들었어요.' : `카드 ${CN.filter((c) => cards[c.id].s && imgOk(cards[c.id])).length}/4 완성`;
       if (ready && !flags.made) { flags.made = true; onAction('made'); onReady?.(); }
       return;

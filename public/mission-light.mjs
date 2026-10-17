@@ -738,7 +738,8 @@ export function rayPuzzle({el, button, mode = 'straight', task = {}, memory = {}
     else if (!night) for (const b of sc.blocks || []) { if (b.hide) continue; if ((b.x1 === 700 || b.x1 === 660) && b.x2 === b.x1) continue; if (b.y1 === 352 && b.y2 === 352) continue; if (Math.abs(b.x1 - 50) < 1 && Math.abs(b.x2 - 50) < 1) continue; c.strokeStyle = '#4a5466'; c.lineWidth = 8; c.lineCap = 'square'; c.beginPath(); c.moveTo(b.x1, b.y1); c.lineTo(b.x2, b.y2); c.stroke(); c.lineCap = 'butt'; }
     for (const L of sc.lenses || []) drawLens(c, L);
     for (const m of sc.mirrors || []) drawMirror(c, m);
-    for (const t of sc.targets || []) drawTarget(c, t, anyHit(res, t.id));
+    // 빛 여러 줄을 한 표적에 모으는 퍼즐은 모든 줄이 닿아야 표적이 켜진다(한 줄만 닿고 끝난 줄 알지 않게)
+    for (const t of sc.targets || []) drawTarget(c, t, !P.lamp && t.id === 'T' && (sc.rays || []).length > 1 ? allHit(res, t.id) : anyHit(res, t.id));
     if (P.lamp) drawShadeBands(c, v[0], res);
     // 겨냥선(네모 수조): 레이저가 가리키는 방향으로 곧게 그은 점선
     if (mode === 'water' && st.name === '네모 수조' && goggles()) {
@@ -800,7 +801,8 @@ export function rayPuzzle({el, button, mode = 'straight', task = {}, memory = {}
     else if (n < 0 || n >= p.vals.length) { status.textContent = '더 옮길 수 없어요. 반대쪽으로 옮겨 봐요.'; return; }
     idx[sel] = n; after(true);
   }
-  const MOVES = {y: [['위로 옮기기', -1], ['아래로 옮기기', 1]], x: [['왼쪽으로 옮기기', -1], ['오른쪽으로 옮기기', 1]], rot: [['왼쪽으로 돌리기', 1], ['오른쪽으로 돌리기', -1]]};
+  // 돌리기 단추에는 도는 방향 표시(↺ 시계 반대, ↻ 시계 방향)를 CSS로 붙인다. 단추 글자는 도움말과 같게 둔다
+  const MOVES = {y: [['위로 옮기기', -1], ['아래로 옮기기', 1]], x: [['왼쪽으로 옮기기', -1], ['오른쪽으로 옮기기', 1]], rot: [['왼쪽으로 돌리기', 1, 'rot-ccw'], ['오른쪽으로 돌리기', -1, 'rot-cw']]};
   function renderTray() {
     tray.replaceChildren();
     if (!goggles()) { tray.append(button('보안경 쓰기', () => { memory.goggles = true; status.textContent = '보안경을 썼어요. 레이저가 켜졌어요.'; after(false); }, 'mission-go')); return; }
@@ -809,7 +811,9 @@ export function rayPuzzle({el, button, mode = 'straight', task = {}, memory = {}
     if (st.parts.length > 1) tray.append(seg(el, button, '고를 부품', st.parts.map((x, i) => [i, x.name]), sel, (i) => { sel = i; status.textContent = `${jo(st.parts[i].name, '을', '를')} 골랐어요.`; renderTray(); }));
     const p = st.parts[sel];
     if (p.kind === 'pick') tray.append(seg(el, button, p.name, p.vals.map((x, i) => [i, p.names[i]]), s.v[s.stage][sel], (i) => { s.v[s.stage][sel] = i; after(true); }));
-    else tray.append(el('div', {class: 'bench-wire'}, el('b', {class: 'bench-wire-name'}, p.name), el('span', {class: 'bench-seg'}, MOVES[p.kind].map(([n, dir]) => button(n, () => move(dir), 'bench-opt')))));
+    else tray.append(el('div', {class: 'bench-wire'}, el('b', {class: 'bench-wire-name'}, p.name), el('span', {class: 'bench-seg'}, MOVES[p.kind].map(([n, dir, turn]) => button(n, () => move(dir), 'bench-opt' + (turn ? ' ' + turn : ''))))));
+    // 처음 자리로: 도움말의 조작 횟수는 처음 자리에서 센 것이라, 부품을 움직인 뒤에도 다시 따라 할 수 있게 한다
+    if (st.parts.some((x, i) => s.v[s.stage][i] !== x.at)) tray.append(button('처음 자리로', () => { s.v[s.stage] = st.parts.map((x) => x.at); sel = 0; after(false); status.textContent = '부품을 처음 자리로 되돌렸어요.'; }, 'secondary'));
     if (s.solved[s.stage] && s.stage < P.stages.length - 1) tray.append(button(`${P.stages[s.stage + 1].name} 실험하기`, () => { s.stage++; sel = 0; after(false); }, 'mission-go'));
   }
   canvas.addEventListener('keydown', (e) => {
@@ -856,7 +860,7 @@ export function lightRiddle({el, button, task = {}, memory = {}, onAction: fire,
     });
     if (solved) text(c, `정답: ${name(R0().answer)}`, 360, 312, {size: 18, align: 'center', color: '#1f6b47'});
     else if (s.wrong.length) text(c, `아닌 것: ${s.wrong.map(name).join(', ')}`, 360, 312, {size: 14, align: 'center', color: '#8a3b2a'});
-    text(c, '도움말을 적게 보고 맞힐수록 좋아요.', 360, 352, {size: 12, bold: false, align: 'center', color: '#51637a'});
+    text(c, '도움말을 한 장씩 열며 맞혀 봐요.', 360, 352, {size: 12, bold: false, align: 'center', color: '#51637a'});
     raf = requestAnimationFrame(draw);
   }
   function guess(id) {

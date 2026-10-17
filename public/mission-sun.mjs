@@ -363,9 +363,16 @@ export function sunSeason({el, button, mode, task = {}, memory = {}, onAction, o
         if (!ok) { status.textContent = `${pm + 1}월 20일 값과 점의 높이가 달라요. 표의 값을 다시 읽고 눈금을 세어 보세요.`; return; }
         plot[series][pm] = pv; const n = Object.keys(plot[series]).length;
         const next = MARCH_FIRST.find((m) => plot[series][m] == null); if (next != null) { pm = next; pv = series === 'alt' ? pv : pv; }
-        status.textContent = `${n}개째 점을 찍었어요.${n >= 12 ? '' : ' 다음 달로 넘어가요.'}`;
+        status.textContent = `${n}개째 점을 찍었어요.${n >= 12 ? '' : ' 다음 달로 넘어가요.'}${n === 6 ? ' 나머지는 「나머지 점 한꺼번에 찍기」로 찍어도 돼요.' : ''}`;
         paintTable(); render(); if (n >= 12) { act('plotted'); onReady?.(); }
       }, 'mission-go'));
+      // 여섯 점을 맞게 찍으면 나머지는 표의 값대로 한꺼번에 찍을 수 있다(같은 조작을 열두 번 되풀이하지 않게)
+      const placed = Object.keys(plot[series]).length;
+      if (placed >= 6) tray.append(button('나머지 점 한꺼번에 찍기', () => {
+        for (const m of MARCH_FIRST) if (plot[series][m] == null) plot[series][m] = series === 'alt' ? monthRecord(m).alt : Math.round(monthRecord(m).len * 60);
+        status.textContent = '나머지 달도 표의 값대로 찍었어요. 그래프의 모양을 살펴보세요.';
+        paintTable(); render(); act('plotted'); onReady?.();
+      }, 'secondary'));
       return;
     }
     if (mode === 'make') return;
@@ -464,8 +471,11 @@ export function sunSeason({el, button, mode, task = {}, memory = {}, onAction, o
   if (mode === 'make') { maker(); status.textContent = memory.card?.done ? '만든 카드가 게시판에 올라가 있어요.' : '날짜를 고르면 낮의 길이와 단서가 채워져요.'; }
   else render();
   paintTable();
-  if (!status.textContent) status.textContent = {paths: '네 날의 태양길을 하나씩 저장해 보세요.', months: '달을 고르면 그달 20일 12시 30분의 하늘로 가요. 열두 달을 모두 기록해요.', region: '척척의 지역 설정을 진해, 서울, 제주로 바꿔 보세요.', sky: '달을 바꾸며 12시 30분의 태양 자리를 비교하거나, 시간을 빠르게 돌려 보세요.', graph: '매월 20일의 계산값으로 그린 그래프예요. 가로축은 3월부터 시작해요.', plot: series === 'alt' ? '달을 고르고 표의 남중 고도만큼 점의 높이를 맞춘 뒤 점을 찍으세요.' : '다른 색으로 낮의 길이 점을 찍어 남중 고도 그래프 위에 겹치세요.'}[mode] || '';
   const ready = {paths: paths.length >= 4, months: Object.keys(months).length >= 12, region: regions.length >= 3, graph: true, sky: true, plot: Object.keys(plot[series]).length >= 12, make: !!memory.card?.done}[mode];
+  // 이미 다 한 장면에 다시 들어오면 「~해 보세요」 대신 끝났다고 알려 준다
+  const doneText = {paths: '네 날의 태양길을 모두 저장했어요. 아래 문항에 답해 보세요.', months: '열두 달을 모두 기록했어요. 아래 문항에 답해 보세요.', region: '세 지역을 모두 바꿔 보았어요. 아래 문항에 답해 보세요.'}[mode];
+  if (ready && doneText) status.textContent = doneText;
+  if (!status.textContent) status.textContent = {paths: '네 날의 태양길을 하나씩 저장해 보세요.', months: '달을 고르면 그달 20일 12시 30분의 하늘로 가요. 열두 달을 모두 기록해요.', region: '척척의 지역 설정을 진해, 서울, 제주로 바꿔 보세요.', sky: '달을 바꾸며 12시 30분의 태양 자리를 비교하거나, 시간을 빠르게 돌려 보세요.', graph: '매월 20일의 계산값으로 그린 그래프예요. 가로축은 3월부터 시작해요.', plot: series === 'alt' ? '달을 고르고 표의 남중 고도만큼 점의 높이를 맞춘 뒤 점을 찍으세요.' : '다른 색으로 낮의 길이 점을 찍어 남중 고도 그래프 위에 겹치세요.'}[mode] || '';
   if (ready) setTimeout(() => onReady?.(), 0);
   return {node, stop: () => { alive = false; stopPlay(); }};
 }

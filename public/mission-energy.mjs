@@ -540,7 +540,7 @@ function ranchTech({el, button, task = {}, memory = {}, onAction: fire, onReady}
     for (let i = 0; i <= n; i++) txt(c, i ? `${i}회` : '처음', P(i, 0)[0], gy + 16, {size: 10, bold: false, color: SOFT, align: 'center'});
     c.strokeStyle = '#e0a52a'; c.lineWidth = 3; c.beginPath(); st.hist.forEach((v, i) => (i ? c.lineTo(...P(i, v)) : c.moveTo(...P(i, v)))); c.stroke();
     st.hist.forEach((v, i) => { c.fillStyle = '#e0a52a'; ellipse(c, ...P(i, v), 3.5, 3.5); });
-    txt(c, '네 목장이 회마다 1개씩, 모두 4개를 써요.', 470, 334, {size: 11, bold: false, color: SOFT});
+    txt(c, '이번에는 네 목장이 회마다 1개씩 써요.', 470, 334, {size: 11, bold: false, color: SOFT});
     txt(c, '캐낸 광물은 다시 채워지지 않아요.', 470, 352, {size: 11, bold: false, color: SOFT});
     if (!total) chip(c, '광물이 다시 바닥났어요', 135, 54, {bg: '#ffe0d8', color: '#9a2a22', size: 13});
   }
@@ -1220,7 +1220,7 @@ function houseDesign({el, button, task = {}, memory = {}, onAction: fire, onRead
     const b = houseBars(st.h), sum = Math.round((b.heat + b.cool + b.light) * 10) / 10;
     st.tries++;
     if (sum <= HOUSE_GOAL) {
-      status.textContent = `세 막대의 합은 ${sum}, 기본 집 ${Math.round(BASE_SUM)}의 60% 이하예요. 에너지를 적게 쓰는 집을 설계했어요.`;
+      status.textContent = `세 막대의 합은 ${sum}, 목표 ${Math.round(HOUSE_GOAL)} 이하예요. 기본 집 ${Math.round(BASE_SUM)}보다 에너지를 적게 쓰는 집을 설계했어요.`;
       party = performance.now();
       if (!fired) { fired = true; st.done = true; onAction('designed'); onReady?.(); }
     } else status.textContent = `세 막대의 합은 ${sum}, 목표는 ${Math.round(HOUSE_GOAL)} 이하예요. 가장 긴 막대를 줄이는 방법부터 찾아 다시 골라 봐요.`;

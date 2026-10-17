@@ -1,17 +1,17 @@
-"""자기 말로 설명하기. 꼭 넣을 낱말이 들어 있는지와 개념을 바르게 설명했는지는 따로 기록한다.
-학생 원문은 고치지 않고, 낱말 확인과 관찰 근거만 덧붙인다. 개념 판단은 교사가 한다."""
+"""자기 말로 설명하기. 원문과 교사 평가는 보존하고 해당 문항 판의 핵심어 확인을 덧붙인다."""
 import hashlib
 import json
 import re
 
 import inquiry
+import answer_support
 
 EVENTS = {'writeup.submitted'}
 SCHEMA = ['CREATE TABLE IF NOT EXISTS writeup_editions(revision TEXT PRIMARY KEY,game_id TEXT NOT NULL,payload TEXT NOT NULL)']
 # 학생에게 보내지 않는 칸: 교사용 평가 기준 설명과 예시 답
-TEACHER_ONLY = {'criteria', 'samples'}
+TEACHER_ONLY = {'criteria', 'samples', 'answerRule'}
 MODES = {'written', 'oral_teacher'}
-HELP = {'concept'}
+HELP = {'concept', 'initials'}
 KEYS = {'gameId', 'itemRevision', 'runId', 'gameVersion', 'sequence', 'hint', 'answer', 'evidence', 'version', 'revises', 'change', 'help', 'mode'}
 LIMIT = 1200
 MEMO = 300
@@ -50,7 +50,12 @@ def resolve(c, root, gid, rev=None):
 
 
 def public(item):
-    return {k: v for k, v in item.items() if k not in TEACHER_ONLY}
+    # 핵심어 목록(answerRule)은 학생에게 보내지 않는다. 초성은 학생이 요청할 때만 서버에서 준다. 묶음 수만 알려 준다.
+    branch = (answer_support.branches(item.get('answerRule')) or [{}])[0]
+    return {**{k: v for k, v in item.items() if k not in TEACHER_ONLY | {'answerRule'}},
+            'answerSupport': bool(answer_support.branches(item.get('answerRule'))),
+            'answerGroups': len(branch.get('groups', [])),
+            'minChars': 1 if item.get('answerRule') else MIN_CHARS}
 
 
 def editions(c, root, revs):
@@ -125,8 +130,8 @@ def evaluate(item, rev, conf, gid, mission_title, p):
     answer = p.get('answer', '')
     if not isinstance(answer, str) or len(answer) > (LIMIT if mode == 'written' else MEMO):
         raise ValueError('설명은 1200자 안으로 써 주세요.' if mode == 'written' else '메모는 300자 안으로 적어 주세요.')
-    if mode == 'written' and len(norm(answer)) < MIN_CHARS:
-        raise ValueError('한두 문장 이상 써 주세요.')
+    if mode == 'written' and len(norm(answer)) < (1 if (item or {}).get('answerRule') else MIN_CHARS):
+        raise ValueError('핵심 내용을 적어 주세요.' if (item or {}).get('answerRule') else '한두 문장 이상 써 주세요.')
     version = p.get('version', 1)
     if type(version) is not int or not 1 <= version <= 99:
         raise ValueError('설명 차례를 확인해 주세요.')
@@ -138,7 +143,7 @@ def evaluate(item, rev, conf, gid, mission_title, p):
         raise ValueError('도움 기록을 확인해 주세요.')
     cards, dropped = evidence(conf, p.get('evidence', []))
     text = answer.strip()
-    return {
+    result = {
         'gameId': gid, 'taskId': gid + '.WRITEUP', 'taskTitle': (item or {}).get('title', '설명 쓰기'), 'missionTitle': mission_title,
         'answer': answer, 'responseText': text or ('선생님께 말로 설명하기' if mode == 'oral_teacher' else ''),
         'mode': mode, 'version': version, 'revises': p.get('revises', ''), 'change': p.get('change', '').strip(), 'help': used_help,
@@ -150,3 +155,6 @@ def evaluate(item, rev, conf, gid, mission_title, p):
         'review': 'teacher_pending', 'evaluation': 'teacher_review',
         'modality': 'student_explanation' if mode == 'written' else 'oral_teacher',
     }
+    if item and mode == 'written':
+        result.update(answer_support.check(text, item.get('answerRule')) or {})
+    return result

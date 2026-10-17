@@ -1,3 +1,4 @@
+import {electricitySupport,electricityTerms} from './electricity-support.mjs';
 import {paint} from './assets/science-parts.mjs';
 export function magnetMaterials(panel,{el,button,state,record,save,back}){
 const q=state.magnetMaterials??={core:'',roles:{bolt:'',wire:'',battery:'',switch:''},hint:0};let message='';
@@ -5,6 +6,7 @@ const labels={bolt:'볼트',wire:'피복 있는 에나멜선',battery:'전지',s
 const roles={core:'선을 감는 철심',coil:'철심에 감아 전류가 흐르는 길',source:'회로에 전류가 흐르게 하는 전원',control:'회로를 연결하거나 끊기'};
 const ready=()=>q.core==='iron'&&Object.entries({bolt:'core',wire:'coil',battery:'source',switch:'control'}).every(([k,v])=>q.roles[k]===v);
 function render(){panel.replaceChildren(el('h2',{},'공방 재료 서랍'),el('p',{},'신항이: “겉모양이 비슷해도 재료가 다를 수 있어요. 철 부품을 옮길 전자석에 쓸 볼트와 각 부품의 역할을 골라 봐요.”'));
+panel.prepend(electricitySupport(el,'G06','materials'));panel.append(electricityTerms(el,'G06','materials'));
 for(const [value,text]of [['iron','철 볼트'],['brass','황동 볼트'],['plastic','플라스틱 볼트']])panel.append(button(text+' 고르기',()=>{q.core=value;message=text+'를 골랐어요.';save();render()}));
 for(const key of Object.keys(labels)){const select=el('select',{'aria-label':labels[key]+' 역할'});select.append(el('option',{value:''},'역할 고르기'));for(const[value,text]of Object.entries(roles))select.append(el('option',{value},text));select.value=q.roles[key];select.onchange=()=>{q.roles[key]=select.value;save()};panel.append(el('label',{},labels[key],select))}
 panel.append(button('재료 꾸러미 확인',()=>{if(!q.core||Object.values(q.roles).some(v=>!v)){message='볼트 하나와 네 부품의 역할을 모두 골라 주세요.';render();return}record('magnetMaterials.submitted','magnetMaterials',{answer:q.core,roles:{...q.roles},hint:q.hint});message=ready()?'철 볼트와 네 부품의 역할을 확인했어요. 전원을 끄고 제작대로 가져가요.':'볼트의 재질과 전원, 전류의 길, 스위치의 역할을 다시 구별해 보세요.';save();render()}),button('재료 생각 열쇠',()=>{q.hint=Math.min(3,q.hint+1);record('magnetMaterials.hint','magnetMaterials',{answer:'help',hint:q.hint});save();render()}));if(q.hint)panel.append(el('p',{class:'hint'},['이름이 볼트라고 모두 같은 재질일까요?','철 볼트에 피복 있는 에나멜선을 감아요. 전지는 전원이고, 스위치는 회로를 잇거나 끊어요.','철 볼트는 철심, 에나멜선은 감긴 전류의 길, 전지는 전원, 스위치는 연결과 끊기 역할이에요.'][q.hint-1]));if(message)panel.append(el('p',{role:'status'},message));panel.append(button(ready()?'재료를 들고 제작대로':'제작대로 돌아가기',back));}

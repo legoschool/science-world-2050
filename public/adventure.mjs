@@ -1,3 +1,4 @@
+import {JOURNEY_REGIONS,selectedRegion,rememberQuest,chooseRegion,openRegionChoice} from './region-journey.mjs';
 // 화면 위 모험 도구: 현재 의뢰, 목적지 안내, 퀘스트 수첩, 인벤토리, 시작 광장.
 // 첫 이야기는 광장 지도 안에서 진행되므로(atlas.mjs) 여기서는 이야기 단계의 할 일만 보여 준다.
 import {questInfo, questSteps, SIDE_QUESTS, loadMissions} from './quests.mjs';
@@ -12,10 +13,12 @@ import {showLearning, showWeekly, loadWeekly} from './learning.mjs';
 import {openHero} from './hero.mjs';
 import {dexSeen} from './codex.mjs';
 const REGION_NAME = {R1: '햇살 농장 지구', R2: '불꽃 에너지 지구', R3: '전력망 지구', R4: '미래 연구 본부', R5: '푸른 생활 지구'};
-export function adventureHUD({el, button, state, api, save, go, route, pending, uid, preview = false}) {
+import {openTextbook} from './textbook.mjs';
+export function adventureHUD({el, button, state, api, save, go, route, pending, uid, preview = false, editNickname, currentGame = () => '', pace = () => '', setPace = null}) {
   state.adventure ??= {welcomed: false, tracked: 'R3-G04'};
+  const quick = pace() === 'quick';
   const a = state.adventure, bar = el('section', {class: 'adventure-bar', 'aria-label': '모험 도구'}), mission = el('strong', {}, '의뢰를 확인하고 있어요'), dialog = el('dialog', {class: 'adventure-dialog'});
-  let alive = true, data = null, stamp = -1, busy = false;
+  let alive = true, data = null, stamp = -1, busy = false, regionChoice=null;
   // 구역 현장 활동 목록(퀘스트 수첩 아래쪽)
   let fieldData = null, extraData = null;
   const zoneTitles = {};
@@ -26,6 +29,7 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
   const questsButton = hudBtn('📒', '퀘스트 수첩', () => showQuests(), 'hud-quests'), inventoryButton = hudBtn('🎒', '인벤토리', () => showInventory(), 'hud-inventory');
   questsButton.disabled = true;
   const restore = el('span', {class: 'restore-badge', title: '전력망 지구를 얼마나 되살렸는지 보여 줘요'}, '전력망 지구 복구 0%');
+  restore.hidden = true;
   const levelBox = el('div', {class: 'level-box', title: '단계와 의뢰를 끝내고 징표를 모으면 경험치가 쌓여요'}), levelText = el('strong', {}, 'Lv.1'), levelFill = el('span', {class: 'level-fill'});
   levelBox.append(levelText, el('span', {class: 'level-bar'}, levelFill));
   levelBox.setAttribute('role', 'button'); levelBox.tabIndex = 0; levelBox.setAttribute('aria-label', '탐험가 정보');
@@ -40,7 +44,13 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
   function showBoard() { if (boardOpen) return; boardOpen = true; if (dialog.open) dialog.close(); openBoard({el, button, api, uid, quests: () => data?.quests || [], current: () => a.tracked || '', onSeen: () => paintBoard(0), onClose: () => { boardOpen = false; checkBoard(); }}).catch(() => { boardOpen = false; }); }
   // 현재 의뢰는 지도 위 가운데 표지로 보인다. 보여 주기만 하고 아래의 장소 이름표 누르기를 막지 않는다.
   const questChip = el('div', {class: 'quest-chip'}, mission);
-  bar.append(levelBox, restore, hudBtn('🧭', '목적지 안내', () => route(), 'hud-route'), questsButton, inventoryButton, boardButton, hudBtn('🏠', '시작 광장으로', () => { open('중앙 광장으로 돌아갈까요?'); dialog.append(el('p', {}, '현재 탐구 기록을 보관하고 중앙 광장으로 돌아갑니다.'), button('중앙 광장으로 돌아가기', () => { dialog.close(); go('hub'); })); }, 'hud-minor hud-home'));
+  bar.append(levelBox, restore, quick ? '' : hudBtn('🧭', '목적지 안내', () => route(), 'hud-route'), questsButton, inventoryButton, boardButton, hudBtn('📘', '교과서', () => openTextbook({el, button, api, mission: currentGame() || a.tracked || 'R3-G04'}), 'hud-book'), quick ? hudBtn('📋', '의뢰 고르기', () => go('quick'), 'hud-minor hud-home hud-quick') : hudBtn('🏠', '시작 광장으로', () => { open('중앙 광장으로 돌아갈까요?'); dialog.append(el('p', {}, '현재 탐구 기록을 보관하고 중앙 광장으로 돌아갑니다.'), button('중앙 광장으로 돌아가기', () => { dialog.close(); go('hub'); })); }, 'hud-minor hud-home'), setPace ? hudBtn('🔀', '길 바꾸기', () => showPace(), 'hud-minor hud-pace') : '');
+  // 길 바꾸기: 이야기 모두 보기와 빠르게 문제만. 진행과 완료는 두 길이 함께 쓴다.
+  function showPace() {
+    open('어떤 길로 갈까요?');
+    const pick = (p, label) => { const b = button(label, () => { dialog.close(); if (p !== pace()) setPace(p); }, 'pace-pick ' + p); b.setAttribute('aria-pressed', String(pace() === p)); return b; };
+    dialog.append(el('div', {class: 'pace-options'}, pick('story', '이야기 모두 보기'), pick('quick', '빠르게 문제만')));
+  }
   // 전체 화면: 브라우저가 지원할 때만 단추를 보인다(아이폰 사파리는 지원하지 않는다). Esc로도 끝난다.
   const fsRoot = document.documentElement, fsRequest = fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen;
   const fsNow = () => document.fullscreenElement || document.webkitFullscreenElement;
@@ -80,7 +90,8 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
     if (questTab === 'learning') { const box = el('div', {class: 'learn-box'}); dialog.append(box); showLearning({el, api, box}); return; }
     if (questTab === 'weekly') { const box = el('div', {class: 'weekly-box'}); dialog.append(box); showWeekly({el, box, data: weekly}); return; }
     if (!data) { dialog.append(el('p', {}, '연결 상태를 확인한 뒤 다시 열어 주세요.')); return; }
-    if (!a.welcomed) dialog.append(el('p', {class: 'quest-story'}, '지금 할 일: ' + (state.story?.hint || '중앙 광장에서 신항이를 만나 보세요')));
+    if (!a.welcomed) dialog.append(el('p', {class: 'quest-story'}, '지금 할 일: ' + (quick ? '의뢰 고르기 판에서 의뢰를 하나 골라요' : state.story?.hint || '중앙 광장에서 신항이를 만나 보세요')));
+    if (!quick) dialog.append(button('복구할 지역 고르기',showRegions,'secondary'));
     if (allDone()) dialog.append(el('p', {class: 'quest-story'}, '네 지구 의뢰 52개를 모두 해결했어요. ', button('엔딩 다시 보기', () => { dialog.close(); openEnding(); })));
     for (const q of [...data.quests].sort((x, y) => x.id.localeCompare(y.id))) {
       const info = questInfo(q.id), steps = questSteps(q.id, state, stepProgress), doneCount = steps.filter(Boolean).length;
@@ -94,7 +105,7 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
         if (a.tracked === q.id) more.open = true;
         row.append(more);
       }
-      row.append(button(a.tracked === q.id ? '추적 중' : '이 의뢰 추적', () => { a.tracked = q.id; save(); draw(); showQuests(false); window.dispatchEvent(new Event('adventure-tracked')); }));
+      row.append(button(a.tracked === q.id ? '추적 중' : '이 의뢰 추적', () => { rememberQuest(a,q.id); save(); draw(); showQuests(false); window.dispatchEvent(new Event('adventure-tracked')); }));
       dialog.append(row);
     }
     dialog.append(el('h3', {class: 'side-head'}, '주민 부탁'));
@@ -112,8 +123,17 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
     }
     if (refetch) Promise.all([api('workshop-progress?runId=' + encodeURIComponent(state.runId)).catch(() => null), api('magnet-progress?runId=' + encodeURIComponent(state.runId)).catch(() => null)]).then(([g05, g06]) => { stepProgress = {g05, g06}; if (notebookOpen() && questTab === 'quests') showQuests(false); });
   }
+  function showRegions(){
+    if(!data)return;if(dialog.open)dialog.close();
+    if(!a.welcomed){window.dispatchEvent(new Event('open-region-choice'));return;}
+    regionChoice=openRegionChoice({adventure:a,quests:data.quests,onClose:()=>{regionChoice=null;},onSelect:key=>{
+      const q=chooseRegion(a,key,data.quests);if(!q)return;save();draw();window.dispatchEvent(new Event('adventure-tracked'));
+      if((state.travel?.map||'hub')==='hub'){open('다음 목적지');dialog.append(el('p',{},q.title+' 의뢰를 골랐어요. 노란 표식을 따라 길을 걸어가요.'),button('목적지까지 걸어가기',()=>{dialog.close();route();}),button('광장 더 둘러보기',()=>dialog.close(),'secondary'));}
+      else{open('다음 목적지');dialog.append(el('p',{},q.title+' 의뢰를 골랐어요. 지금까지의 탐구 기록과 위치는 보관되어 있어요.'),button('중앙 광장에서 길 찾기',()=>{dialog.close();go('hub');}),button('이곳에서 더 둘러보기',()=>dialog.close(),'secondary'));}
+    }});
+  }
   // 인벤토리: 탐험가 정보 창(public/hero.mjs)의 「소지품」. 위쪽 막대의 레벨 칸은 「상태」로 연다.
-  const heroCtx = {el, button, state, save, uid, data: () => data, who: () => document.querySelector('#identity')?.textContent || '',
+  const heroCtx = {el, button, state, save, uid, editNickname, data: () => data, who: () => document.querySelector('#identity')?.textContent || '',
     counts: () => countDone(doneIds()), wearCounts: () => wearCounts(), tasksDone: () => tasksDone(),
     dex: () => api('dex?runId=' + encodeURIComponent(state.runId)), dexIds: () => (data?.dex || []).map((c) => c.id), dexTotal: () => data?.dexTotal || 0,
     repair: () => { const inHub = (state.travel?.map || 'hub') === 'hub' && document.querySelector('.atlas-hub'); if (inHub) window.dispatchEvent(new Event('open-repair')); else go('hub'); }};
@@ -221,7 +241,7 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
       el('li', {}, el('b', {}, '걷기'), ' 방향키 또는 W, A, S, D를 눌러요. 지도를 누르면 그곳까지 걸어가요.'),
       el('li', {}, el('b', {}, '달리기'), ' Shift를 누른 채로 걸어요.'),
       el('li', {}, el('b', {}, '말 걸기, 조사하기'), ' 가까이 가서 E 또는 Enter를 눌러요. 사람이나 장소 이름표를 눌러도 돼요.'),
-      el('li', {}, el('b', {}, '대사 넘기기'), ' 「다음」 단추의 숫자가 다 지나가면 눌러요. 그동안 대사를 읽어 봐요.'),
+      el('li', {}, el('b', {}, '대사 넘기기'), ' 글자가 나오는 중이면 말풍선 글이나 「글 바로 보기」를 눌러 한 번에 봐요. 글이 다 보이면 「다음」을 눌러요. 지역 이야기는 「이야기 건너뛰기」로 넘기고, 과학 안내판에서 다시 볼 수 있어요.'),
       el('li', {}, el('b', {}, '창 닫기'), ' Esc를 누르거나 창 바깥을 눌러요.')),
       el('h3', {}, '단축키'), el('div', {class: 'controls-keys'}, ...KEYS.map(([k, label]) => el('span', {}, el('kbd', {}, k), ' ' + label))));
     try { localStorage.setItem('science-world:controls-seen', '1'); } catch { /* 저장하지 못하면 다음에 다시 보인다 */ }
@@ -274,17 +294,20 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
     checkRegions();
     const solved = (id) => !!data?.quests.some((q) => q.id === id && q.status === 'completed');
     // 위쪽 막대의 복구율은 지금 추적 중인 의뢰의 지구를 보여 준다. 전력망 지구는 광장 안내판 복구를 한 칸으로 더한다.
-    const rk = /^R\d-/.test(a.tracked || '') ? a.tracked.slice(0, 2) : 'R3', rq = (data?.quests || []).filter((x) => x.id.startsWith(rk + '-'));
+    if(a.welcomed&&!a.selectedRegion&&rememberQuest(a,a.tracked))save();
+    restore.hidden = !selectedRegion(a);
+    const rk = JOURNEY_REGIONS.find(r=>r.key===selectedRegion(a))?.code || 'R3', rq = (data?.quests || []).filter((x) => x.id.startsWith(rk + '-'));
     const done = rq.filter((x) => solved(x.id)).length + (rk === 'R3' && state.story?.repaired ? 1 : 0), total = rq.length + (rk === 'R3' ? 1 : 0);
     restore.textContent = `${REGION_NAME[rk]} 복구 ${total ? Math.round((100 * done) / total) : 0}%`; restore.title = `${REGION_NAME[rk]}를 얼마나 되살렸는지 보여 줘요`;
     if (!a.welcomed) { mission.textContent = '지금 할 일: ' + (state.story?.hint || '중앙 광장에서 신항이를 만나 보세요'); return; }
     const cur = data?.quests.find((q) => q.id === a.tracked);
     if (cur?.status === 'completed') {
       const list = [...data.quests].sort((x, y) => x.id.localeCompare(y.id)).filter((q) => q.status !== 'completed');
-      const next = list.find((q) => q.id.slice(0, 3) === cur.id.slice(0, 3) && q.id > cur.id) || list.find((q) => q.id.slice(0, 3) === cur.id.slice(0, 3)) || list[0];
-      if (next) { a.tracked = next.id; save(); setTimeout(() => window.dispatchEvent(new Event('adventure-tracked')), 0); }
+      const next = list.find((q) => q.id.slice(0, 3) === cur.id.slice(0, 3) && q.id > cur.id) || list.find((q) => q.id.slice(0, 3) === cur.id.slice(0, 3));
+      if (next) { rememberQuest(a,next.id); save(); setTimeout(() => window.dispatchEvent(new Event('adventure-tracked')), 0); }
     }
     const q = data?.quests.find((q) => q.id === a.tracked);
+    if(q?.status==='completed'){mission.textContent='이 지역의 의뢰를 모두 해결했어요. 퀘스트 수첩에서 다른 지역을 골라 보세요';return;}
     mission.textContent = q ? '현재 의뢰: ' + q.title + ' → ' + q.place : data ? '의뢰를 골라 주세요' : '의뢰를 확인하고 있어요';
     const info = q && questInfo(q.id);
     if (info) { const s = questSteps(q.id, state, stepProgress), i = s.indexOf(false); mission.append(el('span', {class: 'mission-step'}, i >= 0 ? `${i + 1}/${s.length}단계: ${info.steps[i]}` : '모든 단계 완료')); }
@@ -311,5 +334,5 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
   const onVisible = () => { if (document.visibilityState === 'visible') checkBoard(); };
   document.addEventListener('visibilitychange', onVisible);
   checkBoard(); const boardTimer = setInterval(() => { if (!document.querySelector('dialog[open]')) checkBoard(); }, 90000);
-  return () => { alive = false; clearInterval(timer); clearInterval(boardTimer); clearTimeout(firstGuide); window.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('open-class-board', showBoard); window.removeEventListener('open-weekly', openWeekly); window.removeEventListener('dex-got', onDexGot); window.removeEventListener('dex-seen', paintDexDot); window.removeEventListener('open-dex', onOpenDex); window.removeEventListener('adventure-story', redraw); window.removeEventListener('adventure-tracked', redraw); window.removeEventListener('show-ending', openEnding); document.removeEventListener('fullscreenchange', syncFull); document.removeEventListener('webkitfullscreenchange', syncFull); head?.append(...headItems); document.body.classList.remove('game-view'); dialog.remove(); questChip.remove(); bar.remove(); };
+  return () => { alive = false; regionChoice?.close();regionChoice=null; clearInterval(timer); clearInterval(boardTimer); clearTimeout(firstGuide); window.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('open-class-board', showBoard); window.removeEventListener('open-weekly', openWeekly); window.removeEventListener('dex-got', onDexGot); window.removeEventListener('dex-seen', paintDexDot); window.removeEventListener('open-dex', onOpenDex); window.removeEventListener('adventure-story', redraw); window.removeEventListener('adventure-tracked', redraw); window.removeEventListener('show-ending', openEnding); document.removeEventListener('fullscreenchange', syncFull); document.removeEventListener('webkitfullscreenchange', syncFull); head?.append(...headItems); document.body.classList.remove('game-view'); dialog.remove(); questChip.remove(); bar.remove(); };
 }

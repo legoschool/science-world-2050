@@ -1,3 +1,5 @@
+import {electricitySupport,electricityTerms} from './electricity-support.mjs';
+import {closureAnswer} from './closure-answer.mjs';
 // 고철 부두 크레인 (R3-G07, 6학년 전기의 이용 7차시 [6과15-03])
 // 작은 실험대에서 전자석의 세 성질(켜고 끄기, 전지 수와 세기, 전지 방향과 극)을 확인하고
 // 막대자석과 비교한 뒤, 확인한 규칙만 크레인 운반에 적용한다. 운반 개수는 점수가 아니다.
@@ -37,11 +39,12 @@ const METAL = {iron: '철', copper: '구리', aluminum: '알루미늄'};
 // 받침에 맞는 조사: j('톱니', '이', '가') → '톱니가'
 const j = (w, withB, noB) => { const code = w.charCodeAt(w.length - 1) - 0xac00; return w + (code >= 0 && code < 11172 && code % 28 ? withB : noB); };
 
-export function craneWorkshop(host, {el, button, state, record, save, back}) {
+export function craneWorkshop(host, {el, button, state, record, save, back, api}) {
   const q = state.crane ??= {released: false, question: '', asked: false, closed: false, opened: false, answer: '', hint: 0};
   if (typeof q.step !== 'number') q.step = q.answer === 'decrease' ? 3 : q.asked ? 2 : q.released ? 1 : 0;
   q.recall ??= {}; q.counts ??= {}; q.poles ??= {}; q.table ??= {}; q.evidence ??= {}; q.picks ??= []; q.cargo ??= [];
   let on = false, battery = q.step === 7 && !q.delivered ? 1 : q.battery || 1, reversed = false, near = false, alive = true, raf, feedback = '', lift = 0;
+  let answerCheck=null,checking=false;
   let craneX = 250, head = 0, headTarget = 0, holding = null, pendingAttach = false, keys = new Set(), last = performance.now();
   const items = CARGO.map((c) => ({...c, delivered: q.cargo.includes(c.id)}));
   const emit = (kind, p = {}) => record('crane.' + kind, 'crane', {...p, hint: q.hint});
@@ -52,6 +55,16 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
   root.append(title, canvas, panel);
   host.replaceChildren(root);
 
+  function observationRecords(open=false){
+    const box=el('details',{class:'experiment-record'},el('summary',{},'내 전자석 실험 기록'));box.open=open;const lines=[];
+    if(q.closed)lines.push('스위치를 닫음: 철심 빵 끈이 붙음');
+    if(q.opened)lines.push('스위치를 엶: 붙는 정도가 크게 줄어듦');
+    if(q.counts[1])lines.push('전지 한 개: 붙은 빵 끈 '+MODEL_COUNT[1]+'개');
+    if(q.counts[2])lines.push('전지 두 개 직렬: 붙은 빵 끈 '+MODEL_COUNT[2]+'개');
+    if(q.poles.forward)lines.push('처음 전지 방향: 오른쪽 끝은 '+q.poles.forward+'극, 나침반 N극이 끌려옴');
+    if(q.poles.reverse)lines.push('바꾼 전지 방향: 오른쪽 끝은 '+q.poles.reverse+'극, 나침반 S극이 끌려옴');
+    box.append(lines.length?el('ul',{},lines.map(t=>el('li',{},t))):el('p',{},'아직 관찰 전이에요. 장면의 스위치와 전지를 조작해 보세요.'));return box;
+  }
   function go(step) { q.step = step; q.hint = 0; feedback = ''; on = false; near = false; if (step === 7) { battery = 1; q.battery = 1; } save(); render(); window.scrollTo({top: 0, behavior: 'smooth'}); }
   function setOn(v) {
     if (on === v) return;
@@ -185,7 +198,7 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
         wires(c, [[370, 360], [300, 360], [300, 430], [230, 430]]); wires(c, [[590, 360], [680, 360], [680, 430], [720, 430]]);
         batteries(c, 180, 430, n, false); sw(c, 760, 440, on);
         lift += ((on ? 1 : 0) - lift) * Math.min(1, dt * 8);
-        ties.forEach((t, i) => { const up = i < count; const ty = up ? t.y - (t.y - 378) * lift : t.y; const tx = up ? 390 + (i % 8) * 24 : t.x; c.fillStyle = '#d7dde4'; c.fillRect(tx, ty, 14, 4); c.fillStyle = '#8f96a0'; c.fillRect(tx, ty + 3, 14, 1); });
+        ties.forEach((t, i) => { const up = i < count; const ty = up ? t.y - (t.y - (378 + Math.floor(i / 8) * 8)) * lift : t.y; const tx = up ? 390 + (i % 8) * 24 : t.x; /* 8개를 넘으면 둘째 줄에 붙여 화면에서 셀 수 있게 한다 */ c.fillStyle = '#d7dde4'; c.fillRect(tx, ty, 14, 4); c.fillStyle = '#8f96a0'; c.fillRect(tx, ty + 3, 14, 1); });
         label(c, on ? `스위치 닫힘, 붙은 빵 끈 ${count}개(모형의 관찰 예)` : '스위치 열림, 전류가 흐르지 않음', 480, 40);
         if (s === 3) label(c, '같은 볼트, 같은 감긴 선, 같은 빵 끈에서 전지 수만 바꿔요', 480, 280);
       }
@@ -224,12 +237,15 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
     const s = q.step;
     title.replaceChildren(el('h1', {}, '고철 부두 크레인'), el('span', {class: 'crane-step'}, `${Math.min(s + 1, 10)}/10단계: ${STEPS[Math.min(s, 9)]}`));
     canvas.setAttribute('aria-label', `고철 부두 크레인. ${STEPS[Math.min(s, 9)]} 장면`);
+    answerCheck?.dispose();answerCheck=null;
     panel.replaceChildren();
     const next = (label = '다음 단계로') => button(label, () => go(s + 1), 'crane-next');
     if (q.done) {
       panel.append(el('h2', {}, '부두 화물 이송이 다시 시작되었다.'), say('크레인 기사', '탐험가가 확인한 규칙대로 전자석을 쓰니 화물을 붙였다 놓을 수 있게 됐어요. 고마워요.'), el('p', {class: 'muted'}, '관찰과 제안을 바탕으로 바꾼 미래 모형입니다.'), say('엘엠', '거리 곳곳에도 전자석이 숨어 있대요. 전자석 부두 구역의 "전자석이 숨은 거리"에 가서 무엇이 보이는지 관찰 노트에 남겨 봐요.'), button('전자석 부두로 돌아가기', () => { on = false; back(); }));
       return;
     }
+    panel.append(electricitySupport(el,'G07',s));
+    if([2,5,6,8,9].includes(s))panel.append(observationRecords(s===8));
     if (s === 0) {
       panel.append(say('크레인 기사', '공방에서 전자석을 만들어 봤다며? 크레인을 고치기 전에 먼저 기억을 떠올려 봐요.'));
       panel.append(el('h3', {}, '전자석이 철을 끌어당기는 때는?'), choose([['전류가 흐를 때', () => { q.recall.current = 'current'; render(); }, q.recall.current === 'current'], ['선이 감겨 있으면 언제나', () => { q.recall.current = 'always'; render(); }, q.recall.current === 'always'], ['아직 잘 모르겠다', () => { q.recall.current = 'unknown'; render(); }, q.recall.current === 'unknown']]));
@@ -302,7 +318,7 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
         button(headTarget ? '▲ 올리기' : '▼ 내리기', () => setHead(headTarget ? 0 : 1)),
         button(on ? '스위치 열기(놓기)' : '스위치 닫기(붙이기)', () => setOn(!on)),
         button(battery === 2 ? '전지 한 개로' : '전지 두 개 직렬로', () => setBattery(battery === 2 ? 1 : 2), 'secondary'));
-      panel.append(ctl, el('p', {class: 'muted'}, '방향키 ← →로 옮기고 ↓ ↑로 내리고 올리고, 스페이스로 스위치를 닫고 열 수 있어요. 옮긴 개수는 점수가 아니에요.'));
+      panel.append(ctl, el('p', {class: 'muted'}, '장면을 누르면 크레인이 그 자리로 가요. 방향키 ← →로 옮기고 ↓ ↑로 내리고 올리고, 스페이스로 스위치를 닫고 열 수 있어요. 옮긴 개수는 점수가 아니에요.'));
       if (q.delivered >= 3) panel.append(next('증거를 정리하러 가기'));
     }
     if (s === 8) {
@@ -324,18 +340,25 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
       panel.append(say('크레인 기사', '크레인에 막대자석 대신 전자석을 쓰는 까닭을 정리해 줄래요? 부두 사람들에게 알려 줄게요.'));
       const opts = [['onoff', '필요할 때만 붙였다가 놓을 수 있다'], ['strength', '화물에 맞게 세기를 조절할 수 있다'], ['nopower', '전기가 없어도 언제나 자석이다']];
       panel.append(el('h3', {}, '알맞은 까닭을 모두 골라 봐요'), el('div', {class: 'choices'}, opts.map(([k, t]) => { const b = button(t, () => { q.picks = q.picks.includes(k) ? q.picks.filter((x) => x !== k) : [...q.picks, k]; save(); render(); }); if (q.picks.includes(k)) b.setAttribute('aria-pressed', 'true'); return b; })));
-      const input = el('textarea', {maxlength: 300, 'aria-label': '내 말로 쓴 까닭', placeholder: '예: 전자석은 스위치를 열면 화물을 놓을 수 있어서 크레인에 알맞다.'}); input.value = q.reason || ''; input.oninput = () => { q.reason = input.value; clearTimeout(input.saveT); input.saveT = setTimeout(save, 800); };
-      panel.append(el('h3', {}, '내 말로 까닭을 적어 봐요'), input);
-      panel.append(button('설명을 크레인 기사에게 전하기', () => {
+      const input = el('textarea', {maxlength: 300, 'aria-label': '내 말로 쓴 까닭', placeholder: '화물을 붙일 때와 놓을 때 전자석을 어떻게 다루는지 내 말로 써 봐요.'}); input.value = q.reason || ''; input.oninput = () => { q.reason = input.value; clearTimeout(input.saveT); input.saveT = setTimeout(save, 800); };
+      answerCheck=closureAnswer({el,button,api,record,gameId:'R3-G07',draft:q,save,isActive:()=>alive&&q.step===9});
+      panel.append(el('h3', {}, '내 말로 까닭을 적어 봐요'), input,answerCheck.node);
+      panel.append(button('설명을 크레인 기사에게 전하기', async e => {
+        if(checking)return;
         if (q.picks.includes('nopower')) { feedback = '전기가 없어도 언제나 자석인 것은 막대자석의 성질이에요. 크레인에서 화물을 놓으려면 어떤 성질이 필요할까요?'; render(); return; }
         if (!q.picks.includes('onoff')) { feedback = '크레인은 화물을 붙였다가 놓아야 해요. 그 성질을 골라 봐요.'; render(); return; }
         if (!(q.reason || '').trim()) { feedback = '내 말로 까닭을 한 문장 적어 주세요.'; render(); return; }
-        emit('completed', {answer: q.reason.trim(), card: q.picks.join(',')});
+        const answer=q.reason.trim(),picks=q.picks.join(','),trigger=e.currentTarget;checking=true;trigger.disabled=true;save();
+        const result=await answerCheck.check(answer);checking=false;if(!alive)return;
+        if(!result){trigger.disabled=false;return;}
+        if(q.reason.trim()!==answer||q.picks.join(',')!==picks){feedback='방금 고친 설명과 선택을 다시 보내 주세요.';render();return;}
+        emit('completed', {answer, card:picks, ruleRevision:result.ruleRevision});
         q.done = true; save(); render();
       }, 'crane-next'));
     }
     if (feedback) panel.append(el('div', {class: 'feedback', role: 'status'}, feedback));
     if (!q.done) panel.append(hintBox());
+    if(s!==9)panel.append(electricityTerms(el,'G07',s));
     panel.append(button('전자석 부두로 돌아가기', () => { on = false; back(); }, 'secondary'));
   }
 
@@ -357,5 +380,5 @@ export function craneWorkshop(host, {el, button, state, record, save, back}) {
   });
   render();
   raf = requestAnimationFrame(frame);
-  return () => { alive = false; cancelAnimationFrame(raf); window.removeEventListener('keyup', up); };
+  return () => { alive = false; answerCheck?.dispose(); cancelAnimationFrame(raf); window.removeEventListener('keyup', up); };
 }

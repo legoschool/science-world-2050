@@ -40,6 +40,7 @@ export function openHero(ctx, tab = 'status', opts = {}) {
   }
   paintDexTab();
   dialog.append(el('div', {class: 'hero-head'}, el('h2', {}, '탐험가 정보'), tabs, button('닫기', () => dialog.close(), 'hero-close'), dexTabNote), body);
+  if(ctx.editNickname)dialog.querySelector('.hero-head').append(button('닉네임 바꾸기',()=>{dialog.close();ctx.editNickname();},'secondary'));
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
   dialog.addEventListener('close', () => { stop(); dialog.remove(); }, {once: true});
   document.body.append(dialog);

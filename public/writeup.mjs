@@ -1,7 +1,8 @@
 // 자기 말로 설명하기. 탐구에서 내가 본 관찰을 근거로 고르고, 주민에게 설명하는 글을 써서 보낸다.
-// 서버는 꼭 넣을 말이 글에 들어 있는지만 알려 주고, 설명이 맞는지는 선생님이 읽고 피드백한다.
+// 서버는 해당 문항 판의 핵심어를 확인하고, 선생님은 설명을 읽고 별도로 피드백한다.
 // 처음 설명과 고쳐 쓴 설명은 모두 따로 기록하고(writeup.submitted), 쓰던 글은 의뢰 기록(ms.writeup.draft)에 두어 다른 기기에서도 이어 쓴다.
 import {drawScene} from './discovery.mjs';
+import {answerHint} from './answer-support.mjs';
 
 const PORTRAIT = {'신항이': 'dodam', '엘엠': 'elm', '컴지': 'comji', '달새': 'dalsae'};
 const STATUS = {pending: '선생님이 아직 읽는 중이에요.', revise: '선생님이 고쳐 쓰기를 부탁했어요.', confirmed: '선생님이 읽고 확인했어요.', insufficient: '선생님이 설명을 더 듣고 싶어 해요.'};
@@ -13,10 +14,12 @@ const josa = (w, a, b) => { const c = w.charCodeAt(w.length - 1) - 0xac00; retur
 export function writeupView(host, {el, button, api, record, save, ms, wu, trials = [], uid, runId, gameId, preview = false, nextLabel = '다음으로', onNext, onObserve, onClose, closeLabel = '지금은 그만 쓰기'}) {
   const item = wu.item, w = ms.writeup ??= {versions: [], draft: '', picks: [], change: '', help: []};
   w.versions ??= []; w.picks ??= []; w.help ??= [];
-  let alive = true, busy = false, reviews = null, saveSoon = 0;
+  let alive = true, busy = false, reviews = null, saveSoon = 0, activeHint = null;
+  const minChars = item.minChars || 10;
   let view = w.versions.length && !w.editing ? 'sent' : 'edit';
   const status = el('p', {class: 'writeup-status', role: 'status'});
-  const say = (s) => { status.textContent = s; };
+  let validationMessage = false;
+  const say = (s, validation = false) => { validationMessage = validation; status.textContent = s; if (s && status.isConnected) status.scrollIntoView({block: 'nearest'}); };
   const keep = () => { clearTimeout(saveSoon); saveSoon = setTimeout(() => { if (alive) save(); }, 600); };
   // 같은 조건을 여러 번 관찰했으면 마지막 관찰 하나만 카드로 둔다
   const cards = [];
@@ -24,6 +27,13 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
   w.picks = w.picks.filter((k) => cards.some((c) => c.key === k));
   const last = () => w.versions.at(-1);
   const nextNo = () => (last()?.n || 0) + 1;
+  function hintControl() {
+    if (!item.answerSupport) return '';
+    activeHint = answerHint({el, button, api, payload: () => ({gameId, taskId: 'WRITEUP', itemRevision: wu.itemRevision}),
+      missing: () => (view === 'sent' && last()?.correct === false ? last().answerCheck?.missing : []) || [],
+      isActive: () => alive && host.isConnected, onHint: () => { if (!w.help.includes('initials')) w.help.push('initials'); keep(); }});
+    return activeHint.node;
+  }
 
   function talk() {
     const key = PORTRAIT[item.who];
@@ -51,12 +61,12 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
       else box.append(el('p', {}, '이 의뢰에서 남긴 관찰 카드가 없어요. 의뢰에서 본 것을 떠올려 글에 함께 써 주세요.'));
       return box;
     }
-    box.append(el('p', {}, item.evidenceAsk || '설명의 근거로 쓸 내 관찰을 골라 주세요.'));
+    box.append(el('p', {}, item.evidenceAsk || '설명의 근거로 쓸 내 관찰을 골라 주세요.'), el('p', {class: 'writeup-pick-state', role: 'status'}, w.picks.length ? `근거로 고른 관찰 ${w.picks.length}개` : '아직 고른 관찰이 없어요. 아래 관찰 카드를 눌러 하나 이상 골라 주세요.'));
     const list = el('div', {class: 'writeup-cards', role: 'group', 'aria-label': '근거로 쓸 내 관찰'});
     cards.forEach((c, i) => {
       const on = w.picks.includes(c.key);
       const b = button('', () => {
-        w.picks = on ? w.picks.filter((k) => k !== c.key) : [...w.picks, c.key]; keep(); paint();
+        w.picks = on ? w.picks.filter((k) => k !== c.key) : [...w.picks, c.key]; if (validationMessage) say(''); keep(); paint();
         host.querySelector(`[data-card="${i}"]`)?.focus();
       }, 'writeup-card');
       b.dataset.card = String(i);
@@ -73,7 +83,16 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
     const ta = el('textarea', {maxlength: '1200', rows: '7', 'aria-labelledby': 'wu-mine'});
     if (!w.draft && w.editing && prev?.mode === 'written') w.draft = prev.answer;
     ta.value = w.draft || '';
-    ta.oninput = () => { w.draft = ta.value; keep(); };
+    const readiness = el('p', {id: 'wu-ready', class: 'writeup-readiness'});
+    const updateReadiness = () => {
+      const needs = [];
+      if (cards.length && !w.picks.length) needs.push('근거로 쓸 관찰을 하나 이상 골라 주세요.');
+      if (short(ta.value) < minChars) needs.push(item.answerSupport ? '핵심 내용을 적어 주세요. 짧은 낱말로 써도 괜찮아요.' : `설명은 공백을 빼고 ${minChars}글자 이상 써 주세요. 지금은 ${short(ta.value)}글자예요.`);
+      readiness.textContent = needs.length ? '보내기 전에: ' + needs.join(' ') : item.answerSupport ? '관찰과 연결한 핵심 내용으로 답을 확인해요. 조사나 문장 끝맺음은 자유롭게 써도 돼요.' : '설명을 보낼 준비가 됐어요. 보내고 나면 다음 활동으로 이어갈 수 있어요.';
+    };
+    ta.setAttribute('aria-describedby', 'wu-ready');
+    ta.oninput = () => { w.draft = ta.value; ta.removeAttribute('aria-invalid'); if (validationMessage) say(''); updateReadiness(); keep(); };
+    updateReadiness();
     const change = el('input', {type: 'text', maxlength: '300', 'aria-labelledby': 'wu-change'});
     change.value = w.change || '';
     change.oninput = () => { w.change = change.value; keep(); };
@@ -90,7 +109,8 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
         el('h4', {}, prev ? '설명 고쳐 쓰기' : '설명 쓰기'), el('p', {class: 'writeup-ask'}, item.ask),
         item.guide?.length ? el('ul', {class: 'writeup-guide'}, item.guide.map((g) => el('li', {}, g))) : '',
         item.terms?.length ? el('p', {class: 'writeup-terms'}, el('b', {}, '꼭 넣을 말 '), ...item.terms.map((t) => el('span', {class: 'writeup-term'}, t.word))) : '',
-        el('label', {class: 'writeup-field'}, el('span', {id: 'wu-mine'}, '내 설명'), ta),
+        el('label', {class: 'writeup-field'}, el('span', {id: 'wu-mine'}, '내 설명'), ta), readiness,
+        el('p', {class: 'writeup-note'}, item.answerSupport ? '본 것과 그 까닭의 핵심어로 답을 확인해요. 같은 뜻의 말도 괜찮아요. 어려우면 초성 힌트를 보거나 「선생님께 말로 설명할게요」를 고를 수 있어요.' : '본 것과 그 까닭을 자기 말로 써서 보내요. 설명이 맞는지는 선생님이 확인해요. 글로 쓰기 어려우면 「선생님께 말로 설명할게요」를 골라도 돼요.'), hintControl(), status,
         prev ? el('label', {class: 'writeup-field'}, el('span', {id: 'wu-change'}, '무엇을 고쳤나요 (선택)'), change) : ''),
       el('div', {class: 'writeup-actions'},
         button(concept.hidden ? '정리한 내용 다시 보기' : '정리한 내용 접기', function () {
@@ -117,6 +137,10 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
         el('label', {class: 'writeup-field'}, el('span', {id: 'wu-memo'}, '말할 내용 메모 (선택)'), memo)),
       el('div', {class: 'writeup-actions'}, button('글로 쓰기로 돌아가기', () => { view = 'edit'; paint(); }, 'writeup-quiet'), sendBtn)];
   }
+  function missText(v) {
+    const gap = v.answerCheck?.missing?.length || 0, all = item.answerGroups || 0;
+    return all > 1 && gap ? `설명은 저장했어요. 핵심 내용 ${all}가지 가운데 ${all - gap}가지가 들어 있어요. 초성 힌트에서 「아직 없어요」가 붙은 내용을 넣어 볼까요?` : '설명은 저장했어요. 핵심 내용을 더 넣어 다시 써 볼까요?';
+  }
   function sentView() {
     const v = last();
     loadReviews();
@@ -125,10 +149,11 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
     const body = [el('h3', {}, item.title), el('p', {class: 'writeup-sent-head'}, head)];
     if (v.mode === 'written') {
       body.push(el('div', {class: 'writeup-mine', 'data-no-gloss': ''}, el('p', {}, v.answer)));
+      if (typeof v.correct === 'boolean') body.push(el('p', {class: 'writeup-answer-result', role: 'status'}, v.correct ? '정답이에요. 핵심 내용이 맞아요.' : missText(v)), v.correct ? '' : hintControl(), v.correct ? '' : el('p', {class: 'writeup-note'}, '「고쳐 쓰기」로 빠진 내용을 넣어 다시 보내요. 글로 쓰기 어려우면 「고쳐 쓰기」에서 「선생님께 말로 설명할게요」를 골라도 다음으로 갈 수 있어요.'));
       if (chosen.length) body.push(el('div', {class: 'writeup-chosen'}, el('strong', {}, '근거로 고른 관찰'), el('ul', {}, chosen.map((c) => el('li', {}, `관찰 ${cards.indexOf(c) + 1}: ${c.conditionText}. ${c.observation}`)))));
       if (v.terms?.length) body.push(el('div', {class: 'writeup-check'}, el('strong', {}, '꼭 넣을 말'),
         el('ul', {}, v.terms.map((t) => el('li', {class: t.used ? 'used' : 'missing'}, t.used ? `「${t.word}」${josa(t.word, '을', '를')} 넣었어요.` : `「${t.word}」${josa(t.word, '은', '는')} 아직 없어요. 이 말을 넣어 설명을 다듬어 볼 수 있어요.`))),
-        el('p', {class: 'writeup-note'}, '낱말이 들어 있는지만 살펴봤어요. 설명이 맞는지는 선생님이 읽고 알려 줘요.')));
+        el('p', {class: 'writeup-note'}, typeof v.correct === 'boolean' ? '핵심어로 답을 확인했어요. 자세한 설명은 선생님이 읽고 알려 줘요.' : '낱말이 들어 있는지만 살펴봤어요. 설명이 맞는지는 선생님이 읽고 알려 줘요.')));
     } else {
       body.push(el('div', {class: 'writeup-mine'}, el('p', {}, '선생님께 말로 설명하기로 했어요. 선생님께 설명을 들려 드리면 선생님이 기록을 확인해요.'), v.answer ? el('p', {'data-no-gloss': ''}, '메모: ' + v.answer) : ''));
     }
@@ -138,14 +163,14 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
       el('ol', {'data-no-gloss': ''}, w.versions.slice(0, -1).map((x) => el('li', {}, `${x.n}번째: ` + (x.mode === 'written' ? x.answer : '말로 설명하기' + (x.answer ? ', 메모: ' + x.answer : '')) + (x.change ? ` (고친 점: ${x.change})` : ''))))));
     body.push(el('div', {class: 'writeup-actions'},
       button(v.mode === 'written' ? '고쳐 쓰기' : '글로 써 보기', () => { w.editing = true; w.draft = ''; w.change = ''; view = 'edit'; save(); paint(); host.querySelector('textarea')?.focus(); }, 'writeup-quiet'),
-      onNext ? button(nextLabel, () => { save(); onNext(); }, 'writeup-primary') : ''));
+      onNext && v.correct !== false ? button(nextLabel, () => { save(); onNext(); }, 'writeup-primary') : ''));
     return body;
   }
   async function send(ta, change, sendBtn) {
     if (busy) return;
     const text = ta.value.trim();
-    if (short(text) < 10) { ta.focus(); return say('한두 문장 이상 써 주세요.'); }
-    if (cards.length && !w.picks.length) { host.querySelector('.writeup-card')?.focus(); return say('근거로 쓸 내 관찰을 하나 이상 골라 주세요.'); }
+    if (short(text) < minChars) { say(item.answerSupport ? '핵심 내용을 적어 주세요. 짧은 낱말로 써도 괜찮아요.' : `한두 문장 이상 써 주세요. 공백을 빼고 ${minChars}글자 이상이면 보낼 수 있어요.`, true); ta.setAttribute('aria-invalid', 'true'); ta.focus(); return; }
+    if (cards.length && !w.picks.length) { say('근거로 쓸 내 관찰을 하나 이상 골라 주세요.', true); const card = host.querySelector('.writeup-card'); card?.focus(); card?.scrollIntoView({block: 'center'}); return; }
     const prev = last();
     const p = {gameId, itemRevision: wu.itemRevision, answer: text, evidence: cards.filter((c) => w.picks.includes(c.key)).map((c) => ({roles: c.roles})), version: nextNo(), revises: prev?.id || '', change: prev ? change.value.trim() : '', help: [...w.help], mode: 'written'};
     busy = true; sendBtn.disabled = true; say('보내는 중이에요.');
@@ -156,7 +181,7 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
     let id = '';
     try { if (!preview) id = record('writeup.submitted', 'writeup', {...p, gameVersion: 'writeup-1'}); }
     catch { busy = false; sendBtn.disabled = false; return say('이 기기에 저장하지 못했어요. 글을 따로 적어 두고 선생님께 알려 주세요.'); }
-    w.versions = [...w.versions, {id, n: p.version, at: Date.now(), mode: 'written', answer: text, picks: [...w.picks], change: p.change, terms: r.terms.map((t) => ({word: t.word, used: t.used}))}].slice(-6);
+    w.versions = [...w.versions, {id, n: p.version, at: Date.now(), mode: 'written', answer: text, picks: [...w.picks], change: p.change, terms: r.terms.map((t) => ({word: t.word, used: t.used})), ...(typeof r.correct === 'boolean' ? {correct: r.correct, answerCheck: r.answerCheck, answerRuleVersion: r.answerRuleVersion, itemRevision: wu.itemRevision} : {})}].slice(-6);
     Object.assign(w, {draft: '', change: '', help: [], showConcept: false, editing: false});
     busy = false; view = 'sent'; reviews = null; save(); paint(); say('');
     host.querySelector('.writeup-sent-head')?.focus();
@@ -175,10 +200,12 @@ export function writeupView(host, {el, button, api, record, save, ms, wu, trials
   }
   function paint() {
     if (!alive) return;
+    activeHint?.dispose(); activeHint = null;
     host.classList.add('writeup');
-    host.replaceChildren(...(view === 'sent' && last() ? sentView() : view === 'oral' ? oralView() : editView()), status);
+    host.replaceChildren(...(view === 'sent' && last() ? sentView() : view === 'oral' ? oralView() : editView()));
+    if (!host.contains(status)) host.append(status);
     host.querySelector('.writeup-sent-head')?.setAttribute('tabindex', '-1');
   }
   paint();
-  return () => { alive = false; clearTimeout(saveSoon); };
+  return () => { alive = false; activeHint?.dispose(); clearTimeout(saveSoon); };
 }

@@ -224,9 +224,10 @@ export function armLab({el, button, mode, task = {}, memory = {}, onAction: fire
     const before = goal;
     goal = by === 'in' ? Math.min(120, goal + 25) : Math.max(0, goal - 25);
     if (goal === before) { status.textContent = by === 'in' ? '더 줄일 수 없을 만큼 구부러졌어요. 이번에는 바깥쪽 빨대를 줄여 봐요.' : '팔 모형이 다 펴졌어요. 안쪽 빨대를 줄여 봐요.'; return; }
-    if (by === 'in') { s.seen.bent = true; if (mode === 'attach') s.seen.forePull = true; status.textContent = '위팔 안쪽 빨대를 줄였더니 아래팔뼈가 당겨져 팔 모형이 구부러졌어요. 이때 바깥쪽 빨대는 길어져요.'; }
+    if (by === 'in') { s.seen.bent = true; if (mode === 'attach') s.seen.forePull = true; status.textContent = `위팔 안쪽 빨대를 줄였더니 아래팔뼈가 당겨져 팔 모형이 ${goal > 50 ? '' : '조금 '}구부러졌어요. 이때 바깥쪽 빨대는 길어져요.`; }
     // 펴는 것은 먼저 구부린 뒤에 해야 센다(바깥쪽부터 눌러 거의 펴진 팔을 조금 더 펴는 것만으로 끝나지 않게).
-    else { if (s.seen.bent) s.seen.straight = true; status.textContent = '위팔 바깥쪽 빨대를 줄였더니 팔 모형이 펴졌어요. 이때 안쪽 빨대는 길어져요.'; }
+    // 장면 글과 같은 기준(20 미만이면 「펴져 있어요」)으로 다 펴졌을 때만 「폈다」로 센다. 조금 펴졌으면 더 줄여 보라고 알려 준다
+    else { if (s.seen.bent && goal < 20) s.seen.straight = true; status.textContent = goal < 20 ? '위팔 바깥쪽 빨대를 줄였더니 팔 모형이 다 펴졌어요. 이때 안쪽 빨대는 길어져요.' : '위팔 바깥쪽 빨대를 줄였더니 팔 모형이 조금 펴졌어요. 바깥쪽 빨대를 더 줄이면 다 펴져요.'; }
     s.f = goal; check();
   }
   function check() {

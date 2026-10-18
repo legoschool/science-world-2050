@@ -8,3 +8,16 @@
 .ld-table th,.ld-table .ld-sub{word-break:keep-all;overflow-wrap:normal}
 
 .ld-pace details{margin-top:4px}.ld-pace ul{margin:4px 0 0;padding-left:18px;font-size:13px}
+
+.ld-comp-detail{margin-top:14px;padding:12px;border:1px solid #d9dfe7;border-radius:10px;background:#fbfcfe}
+.ld-comp-detail h4{margin:0 0 8px}
+.ld-comp-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.ld-comp-charts b{display:block;text-align:center}
+.ld-comp-basis{margin:8px 0;padding-left:18px;font-size:14px}
+.ld-comp-detail .radar-ring,.ld-comp-detail .radar-axis{stroke:#c9d2dc}
+.ld-comp-detail .radar-label{fill:#243d35}
+.ld-comp-detail .radar-shape.now{fill:rgba(31,95,174,.2);stroke:#1f5fae}
+.ld-comp-detail .radar-shape.before{fill:rgba(120,120,120,.08);stroke:#8a96a3}
+.ld-comp-detail .radar-shape.tend{fill:rgba(27,99,83,.2);stroke:#1b6353}
+.ld-comp-detail .radar-dot{fill:#1f5fae}
+@media(max-width:700px){.ld-comp-charts{grid-template-columns:1fr}}

@@ -7,7 +7,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 30,
-      "includeFiles": "{server.py,teaching.py,inquiry.py,writeup.py,answer_support.py,learning_metrics.py,learning_reset.py,textbook.py,health_inquiry.py,health_partner.py,data/**,public/regions.json,public/resources.json,public/npcs.mjs,public/field.json,public/standards.json}"
+      "includeFiles": "{*.py,data/**,public/regions.json,public/resources.json,public/npcs.mjs,public/field.json,public/standards.json}"
     }
   },
   "rewrites": [

@@ -1,3 +1,4 @@
+import {radar} from './competency.mjs';
 const el = (tag, attrs = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -235,7 +236,7 @@ export async function openLearningDashboard({api, classId = '', gameId = '', tas
       list.length ? el('details', {}, el('summary', {}, '의뢰별 길'), el('ul', {}, paceList(row).map(t => el('li', {}, t)))) : null);
   }
   function drill(changes, nextTab) {load({selection:{...scope,...changes},nextTab});}
-  const tabs = [['students','학생별'],['activities','활동별'],['stages','단계별'],['classes','학반 비교'],['errors','오류 기록']];
+  const tabs = [['students','학생별'],['activities','활동별'],['stages','단계별'],['classes','학반 비교'],['errors','오류 기록'],['competency','역량']];
   function draw() {
     const summary = data.summary || {};
     const chosenClass = scope.classId ? className(data,scope.classId) : data.filters?.classes?.length === 1 ? data.filters.classes[0].name : '볼 수 있는 모든 반';
@@ -302,6 +303,7 @@ export async function openLearningDashboard({api, classId = '', gameId = '', tas
     const rows = data[grouped ? tab === 'activities' ? 'classActivities' : 'classStages' : tab] || [];
     panel.replaceChildren(el('h3', {}, tabs.find(([id]) => id === tab)[1]));
     if (tab === 'errors') {drawErrors(panel, rows); return;}
+    if (tab === 'competency') {drawCompetency(panel); return;}
     const order = el('select', {'aria-label':'기록 정렬','data-focus-key':'sort'}, option('name','이름, 번호 순'), option('time','참여 시간 많은 순'), option('accuracy','정답률 높은 순'), option('wrong','학습 오답 많은 순'), option('errors','기술 오류 많은 순'));
     order.value = sortBy;
     order.onchange = () => {sortBy = order.value; pageIndex = 0; drawPanel(panel); panel.querySelector('[aria-label="기록 정렬"]')?.focus();};
@@ -349,6 +351,57 @@ export async function openLearningDashboard({api, classId = '', gameId = '', tas
       previous.disabled = pageIndex === 0; next.disabled = pageIndex === pages - 1;
       panel.append(el('nav', {class:'ld-pagination','aria-label':'표 항목 이동'}, previous, el('span', {}, `${pageIndex + 1} / ${pages}쪽`), next));
     }
+  }
+  // 역량: 학생마다 과학 역량 여섯과 탐험 성향 여섯(게임 기록으로 본 모습), 처음 일주일과 지금, 역량 점검 처음과 최근
+  let compClass = '', compData = null, compPick = '';
+  async function drawCompetency(panel) {
+    const classes = data.filters?.classes || [];
+    const cid = scope.classId || compClass || classes[0]?.id || '';
+    const pickClass = classes.length > 1 ? el('select', {'aria-label':'역량을 볼 학반','data-focus-key':'comp-class'}, classes.map(c => option(c.id, c.name))) : null;
+    if (pickClass) {pickClass.value = cid; pickClass.onchange = () => {compClass = pickClass.value; compData = null; compPick = ''; drawCompetency(panel);};}
+    const wait = el('p', {class:'ld-empty'}, '역량을 계산하고 있습니다.');
+    panel.replaceChildren(el('h3', {}, '역량'), el('p', {class:'ld-note'}, '게임 기록(단계 응답, 도움, 예상과 돌아보기, 새 조건 문제, 설명 쓰기, 게시판, 현장 활동)에서 계산한 0~100입니다. 기록이 쌓일수록 오르고, 틀리거나 도움을 받아도 깎이지 않습니다. 성적이나 학생 사이 순위가 아니며, 근거 수가 적으면 아직 판단하기 이릅니다. 역량 점검은 역량마다 상황 문제 2개와 자기 평가 1개(4점)이고, 처음과 최근 점검을 견줍니다.'),
+      pickClass ? el('label', {class:'ld-error-filter'}, el('span', {}, '학반'), pickClass) : '', wait);
+    if (!compData || compData.classId !== cid) {
+      try {compData = await api('teaching/competency' + (cid ? '?classId=' + encodeURIComponent(cid) : ''));}
+      catch (e) {wait.textContent = e.message || '역량을 불러오지 못했습니다.'; return;}
+    }
+    const d = compData, comp = d.competencies, tend = d.tendencies;
+    if (!d.students.length) {wait.textContent = '이 학반에 학생이 없습니다.'; return;}
+    wait.remove();
+    const scoreCell = (r, id) => {const v = r.competencies[id], up = r.start ? v - r.start[id] : 0; return el('span', {}, String(v), up > 0 ? el('small', {class:'ld-sub'}, `처음보다 +${up}`) : '');};
+    const checkText = (ck) => ck ? comp.map(x => `${x.short} ${ck.right[x.id] ?? 0}/2(자기 평가 ${ck.rates[x.id] ?? '-'})`).join(', ') : '';
+    const detail = el('div', {class:'ld-comp-detail'});
+    const show = (r) => {
+      compPick = r.id;
+      const layers = [...(r.start ? [{values: comp.map(x => r.start[x.id]), cls:'before'}] : []), {values: comp.map(x => r.competencies[x.id]), cls:'now'}];
+      detail.replaceChildren(el('h4', {}, studentName(r)),
+        el('div', {class:'ld-comp-charts'},
+          el('div', {}, el('b', {}, '과학 역량'), radar(comp.map(x => ({label:x.short})), layers, {size:260, title:'과학 역량'}), r.start ? el('p', {class:'ld-sub'}, '점선: 처음 일주일, 실선: 지금') : ''),
+          el('div', {}, el('b', {}, '탐험 성향'), radar(tend.map(x => ({label:x.label})), [{values: tend.map(x => r.tendencies[x.id]), cls:'now tend'}], {size:260, title:'탐험 성향'}))),
+        el('ul', {class:'ld-comp-basis'}, comp.map(x => el('li', {}, el('b', {}, `${x.label} ${r.competencies[x.id]}`), ': ', (r.basis[x.id] || []).map(b => `${b.label} ${b.count}`).join(', ') || '근거 기록 없음'))),
+        el('p', {}, `역량 점검 ${r.checks.count}회`, r.checks.first ? el('br') : '', r.checks.first ? '처음: ' + checkText(r.checks.first) : '', r.checks.last ? el('br') : '', r.checks.last ? '최근: ' + checkText(r.checks.last) : ''));
+    };
+    const columns = [
+      {label:'학생', cell:r => button(studentName(r), () => show(r), {class:'ld-link','data-focus-key':'comp-' + r.id})},
+      ...comp.map(x => ({label:x.short, cell:r => scoreCell(r, x.id)})),
+      {label:'근거 수', cell:r => count(r.evidence)},
+      {label:'역량 점검', cell:r => r.checks.count ? `${r.checks.count}회` : '아직 없음'},
+    ];
+    panel.append(el('div', {class:'ld-panel-tools'}, button('역량 CSV', () => compCSV(d))), table(columns, d.students), detail);
+    const picked = d.students.find(r => r.id === compPick) || d.students[0];
+    if (picked) show(picked);
+  }
+  function compCSV(d) {
+    const comp = d.competencies, tend = d.tendencies;
+    const heads = ['번호','닉네임',...comp.map(x => x.label),...comp.map(x => x.label + ' 처음 일주일'),...tend.map(x => x.label),'근거 수','역량 점검 횟수',...comp.map(x => '처음 점검 ' + x.short + ' 문제'),...comp.map(x => '처음 점검 ' + x.short + ' 자기 평가'),...comp.map(x => '최근 점검 ' + x.short + ' 문제'),...comp.map(x => '최근 점검 ' + x.short + ' 자기 평가')];
+    const ck = (c, id, k) => c ? (k === 'right' ? `${c.right[id] ?? 0}/2` : c.rates[id] ?? '') : '';
+    const rows = d.students.map(r => [r.number, r.nickname, ...comp.map(x => r.competencies[x.id]), ...comp.map(x => r.start ? r.start[x.id] : ''), ...tend.map(x => r.tendencies[x.id]), r.evidence, r.checks.count,
+      ...comp.map(x => ck(r.checks.first, x.id, 'right')), ...comp.map(x => ck(r.checks.first, x.id, 'rate')), ...comp.map(x => ck(r.checks.last, x.id, 'right')), ...comp.map(x => ck(r.checks.last, x.id, 'rate'))]);
+    const quote = value => {let s = String(value ?? ''); if (/^[=+@\-\t\r]/.test(s)) s = "'" + s; return '"' + s.replaceAll('"','""') + '"';};
+    const blob = new Blob(['﻿' + [heads,...rows].map(row => row.map(quote).join(',')).join('\r\n')], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob), a = el('a', {href:url, download:`역량-${new Date().toISOString().slice(0,10)}.csv`});
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url),1000);
   }
   function drawErrors(panel, rows) {
     const kind = el('select', {'aria-label':'오류 구분','data-focus-key':'error-kind'}, option('technical','기술 오류'), option('learning','학습 오답'));

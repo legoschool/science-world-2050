@@ -18,6 +18,7 @@ import health_partner
 import writeup
 import answer_support
 import learning_metrics
+import competency
 import learning_reset
 import textbook
 REQUEST_LEARNING_EPOCH=ContextVar('request_learning_epoch',default=None)
@@ -1740,6 +1741,23 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/me':return self.send_json(200,u)
             if u['role']=='student' and path=='/api/health-inquiry':REQUEST_LEARNING_EPOCH.set(self.headers.get('X-Science-Learning-Epoch','0'))
             query=parse_qs(urlparse(self.path).query)
+            if path=='/api/teaching/competency':
+                # 학급 학생마다 과학 역량과 활동 성향(게임 기록으로 본 모습), 처음과 지금, 역량 점검 처음과 최근
+                if u['role'] not in ('teacher','admin'):return self.send_json(403,{'error':'교사 권한이 필요합니다.'})
+                cid=u['class_id'] if u['role']=='teacher' else (query.get('classId',[''])[0] or None)
+                with conn() as c:
+                    if u['role']=='admin' and not cid:
+                        first=c.execute("SELECT id FROM classes WHERE id<>? ORDER BY grade,room LIMIT 1",(GUEST_CLASS,)).fetchone();cid=first['id'] if first else None
+                    rows=[]
+                    for a in c.execute("SELECT id,nickname,number FROM accounts WHERE role='student' AND class_id=? AND COALESCE(active,1)<>0 ORDER BY number",(cid,)).fetchall() if cid else []:
+                        ev,so,fi=competency.load(c,a['id']);pr=competency.profile(missions(),ev,so,fi);gr=competency.growth(missions(),ev,so,fi)
+                        ck=competency.checks(ev,ROOT)
+                        rows.append({'id':a['id'],'nickname':a['nickname'],'number':a['number'],'evidence':pr['evidence'],
+                            'competencies':{k:v['score'] for k,v in pr['competencies'].items()},'tendencies':{k:v['score'] for k,v in pr['tendencies'].items()},
+                            'basis':{k:v['basis'] for k,v in pr['competencies'].items()},'start':gr[0]['competencies'] if len(gr)>1 else None,'weeks':len(gr),
+                            'checks':{'count':len(ck),'first':ck[0] if ck else None,'last':ck[-1] if len(ck)>1 else None}})
+                b=competency.bank(ROOT)
+                return self.send_json(200,{'classId':cid,'competencies':b['competencies'],'tendencies':b['tendencies'],'students':rows})
             if path=='/api/teaching/dashboard':
                 try:
                     with conn() as c:result=learning_metrics.dashboard(c,u,{k:v[0] for k,v in query.items()},teaching_catalog(),TEST_NUMBER,GUEST_CLASS)
@@ -1779,6 +1797,16 @@ class Handler(BaseHTTPRequestHandler):
                 except Invalid as e:return self.send_json(400,{'error':str(e)})
                 except PermissionError:return self.send_json(403,{'error':'이 학급을 관리할 권한이 없습니다.'})
                 return self.send_json(200,board)
+            if path=='/api/my-competency':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                with conn() as c:ev,so,fi=competency.load(c,u['id'])
+                b=competency.bank(ROOT);pr=competency.profile(missions(),ev,so,fi)
+                return self.send_json(200,{'competencies':b['competencies'],'tendencies':b['tendencies'],'profile':pr,'growth':competency.growth(missions(),ev,so,fi),'checks':competency.checks(ev,ROOT),'nextForm':competency.next_form(ev)})
+            if path=='/api/competency-check':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                with conn() as c:ev,_,_=competency.load(c,u['id'])
+                form=competency.next_form(ev)
+                return self.send_json(200,competency.public_check(ROOT,form,u['id']+form))
             if path=='/api/my-learning':
                 if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
                 if u.get('guest'):return self.send_json(200,{'guest':True,'standards':standards_conf()['standards'],'regions':standards_conf()['regions'],'gameCodes':{g:v['codes'] for g,v in standards_conf()['games'].items()},'games':{},'rethink':[],'notes':[]})
@@ -2483,6 +2511,16 @@ class Handler(BaseHTTPRequestHandler):
                 r=validate_event(event)
                 if r.get('evaluation')=='version_unavailable':raise ValueError('의뢰 자료가 바뀌었어요. 의뢰를 다시 열어 주세요.')
                 return self.send_json(200,{k:r[k] for k in ('matched','actualLabel','observed','correct','feedback','evaluation') if k in r})
+            if path=='/api/competency-check':
+                # 역량 점검: 자기 평가 여섯과 상황 문제 열둘을 한꺼번에 받아 채점하고 기록한다(학생 기기는 정답을 받지 않는다)
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                if set(data)-{'form','rates','answers'}:raise ValueError('점검지를 다시 열어 주세요.')
+                result,review=competency.grade(ROOT,data.get('form'),data.get('rates'),data.get('answers'))
+                now=time.time()
+                with conn() as c:
+                    if c.execute('SELECT COUNT(*) FROM events WHERE owner=? AND kind=? AND received>?',(u['id'],competency.CHECK_KIND,now-86400)).fetchone()[0]>=10:raise Invalid('오늘은 역량 점검을 충분히 했어요. 내일 다시 해 봐요.')
+                    c.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?)',(secrets.token_hex(16),u['id'],competency.CHECK_KIND,'competency',time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(now)),now,json.dumps(result,ensure_ascii=False)))
+                return self.send_json(200,{'right':result['right'],'total':result['total'],'review':review})
             if path=='/api/mission-ease':
                 if set(data)-{'gameId','taskId','contentRevision','answerRevision','gameVersion','step'} or type(data.get('step')) is not int or not 0<=data['step']<=40:raise ValueError('도움 요청을 확인해 주세요.')
                 with conn() as c:

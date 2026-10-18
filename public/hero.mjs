@@ -8,6 +8,7 @@ import {BADGES, earnedBadges, explore, fieldDone, dexOf} from './progress.mjs';
 import {WEAR, SLOTS, isOpen, dressSheet, drawPet} from './wardrobe.mjs';
 import {getAvatarSheet, playerAvatar, drawFrame, setPlayerWear} from './sprites.mjs';
 import {renderDex, dexSeen} from './codex.mjs';
+import {renderCompetency} from './competency.mjs';
 
 const REGIONS = [
   {id: 'R1', key: 'farm', name: '햇살 농장 지구', unit: '계절의 변화', color: '#7fd36a', total: 13, fields: 4},
@@ -19,7 +20,7 @@ const REGIONS = [
 const ALL_GAMES = REGIONS.reduce((n, r) => n + r.total, 0), ALL_FIELDS = REGIONS.reduce((n, r) => n + r.fields, 0);
 const RANKS = ['시작 전', '새싹 탐구자', '꼬마 연구원', '연구원', '선임 연구원', '박사'];
 const KIND_COLOR = {도구: '#8fb3d9', 부품: '#7fd36a', 단서: '#c9a2ff', 기록: '#f0c75e'};
-const TABS = [['status', '상태'], ['bag', '소지품'], ['dex', '도감'], ['wear', '소품'], ['badge', '징표']];
+const TABS = [['status', '상태'], ['skill', '역량'], ['bag', '소지품'], ['dex', '도감'], ['wear', '소품'], ['badge', '징표']];
 const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ctx: {el, button, state, data(), save, uid, who, counts(), wearCounts(), tasksDone(), repair(), dex(), dexIds()}
@@ -54,7 +55,7 @@ export function openHero(ctx, tab = 'status', opts = {}) {
     for (const b of tabs.children) b.setAttribute('aria-selected', String(b.dataset.tab === k));
     if (document.activeElement?.classList.contains('hero-tab')) tabs.querySelector(`[data-tab="${k}"]`)?.focus(); // 초점이 다른 칸 단추에 남지 않게
     body.replaceChildren();
-    ({status, bag, dex, wear: wardrobe, badge: badges})[k]();
+    ({status, skill, bag, dex, wear: wardrobe, badge: badges})[k]();
     body.scrollTop = 0;
   }
 
@@ -79,6 +80,9 @@ export function openHero(ctx, tab = 'status', opts = {}) {
     else { const sheet = dressSheet(getAvatarSheet({...playerAvatar()}), {[w.slot]: w.id}); x.translate(32, 0); x.scale(0.78, 0.78); drawFrame(x, sheet, 0, w.slot === 'back' ? 80 : 92, {dir: w.slot === 'back' ? 'up' : 'down'}); }
     return c;
   }
+
+  // ---------------------------------------------------------------- 역량(과학 역량과 탐험 성향 육각형, 역량 점검)
+  function skill() { const box = el('div', {class: 'hero-skill'}); body.append(box); renderCompetency(box, {el, button, api: ctx.api}); }
 
   // ---------------------------------------------------------------- 상태
   function status() {

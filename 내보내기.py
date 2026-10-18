@@ -10,8 +10,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = HERE.parent / 'science-world'
 
-ROOT_FILES = ['server.py', 'teaching.py', 'inquiry.py', 'writeup.py',
-              'health_inquiry.py', 'health_partner.py', 'requirements.txt', 'vercel.json']
+# 최상위 파이썬 모듈은 server.py가 모두 불러 쓰므로 빠짐없이 복사한다(정답 열쇠는 data/에만 있다)
+ROOT_FILES = sorted(p.name for p in SRC.glob('*.py')) + ['requirements.txt', 'vercel.json']
 PUBLIC_EXT = {'.mjs', '.js', '.css', '.html', '.json'}
 PUBLIC_SKIP = ('zz-', 'chibi-preview.', 'scenery-preview.')
 KEEP = {'.git', 'README.md', '.gitignore', '내보내기.py'}

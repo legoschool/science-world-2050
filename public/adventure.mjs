@@ -133,7 +133,7 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
     }});
   }
   // 인벤토리: 탐험가 정보 창(public/hero.mjs)의 「소지품」. 위쪽 막대의 레벨 칸은 「상태」로 연다.
-  const heroCtx = {el, button, state, save, uid, editNickname, data: () => data, who: () => document.querySelector('#identity')?.textContent || '',
+  const heroCtx = {el, button, api, state, save, uid, editNickname, data: () => data, who: () => document.querySelector('#identity')?.textContent || '',
     counts: () => countDone(doneIds()), wearCounts: () => wearCounts(), tasksDone: () => tasksDone(),
     dex: () => api('dex?runId=' + encodeURIComponent(state.runId)), dexIds: () => (data?.dex || []).map((c) => c.id), dexTotal: () => data?.dexTotal || 0,
     repair: () => { const inHub = (state.travel?.map || 'hub') === 'hub' && document.querySelector('.atlas-hub'); if (inHub) window.dispatchEvent(new Event('open-repair')); else go('hub'); }};

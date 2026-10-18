@@ -1339,3 +1339,42 @@ body.game-view .mission-finish-body>.m-actions{position:sticky;bottom:0;z-index:
 .textbook-look strong{display:block;font-size:14px;color:#6a4a00}
 .textbook-easy-toggle[aria-pressed=true]{background:#1b6353;color:#fff;border-color:#1b6353}
 @media(max-width:760px){.textbook-body{flex-direction:column}.textbook-easy{flex:0 0 auto;max-height:40%;border-left:0;border-top:1px solid #d8dfd6}}
+/* 역량 칸: 과학 역량과 탐험 성향 육각형, 근거, 역량 점검(competency.mjs) */
+.radar{width:100%;max-width:300px;height:auto;display:block;margin:0 auto;overflow:visible}
+.radar-ring{fill:none;stroke:rgba(255,255,255,.18);stroke-width:1}
+.radar-axis{stroke:rgba(255,255,255,.18);stroke-width:1}
+.radar-label{fill:#dfe8ff;font-size:13px;font-weight:700}
+.radar-shape.now{fill:rgba(255,214,110,.32);stroke:#ffd36e;stroke-width:2.5}
+.radar-shape.before{fill:rgba(120,170,255,.12);stroke:#8fb3ff;stroke-width:2;stroke-dasharray:6 4}
+.radar-shape.tend{fill:rgba(111,220,176,.3);stroke:#6fdcb0}
+.radar-dot{fill:#fff3c4}
+.skill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.skill-panel .skill-chart{padding:6px 24px 2px}
+.skill-legend{display:flex;gap:14px;justify-content:center;margin:2px 0 6px;font-size:13px}
+.skill-legend .lg::before{content:'';display:inline-block;width:18px;height:0;margin-right:6px;vertical-align:middle;border-top:3px solid #ffd36e}
+.skill-legend .lg.before::before{border-top:3px dashed #8fb3ff}
+.skill-msg{margin:6px 0;color:#c9d6f0;font-size:14px}
+.skill-rows{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px}
+.skill-rows li{padding-top:6px;border-top:1px solid rgba(255,255,255,.07)}
+.skill-top{display:flex;align-items:baseline;gap:8px}
+.skill-top b{margin-left:auto;color:#ffe08a;font-size:16px}
+.skill-up{font-size:12px;color:#7fe0b4}
+.skill-bar{display:block;height:6px;margin:3px 0;border-radius:4px;background:rgba(255,255,255,.12)}
+.skill-bar i{display:block;height:100%;border-radius:4px;background:#ffd36e}
+.skill-rows small{color:#b9c6e4;font-size:12.5px}
+.skill-check{margin-top:14px}
+.skill-table table{width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:10px}
+.skill-table th,.skill-table td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.12);text-align:left}
+.skill-dialog{width:min(760px,calc(100vw - 24px))}
+.skill-paper{max-height:calc(88vh - 70px);overflow:auto;padding-right:4px}
+.skill-paper h3{margin:12px 0 6px;color:#1b6353}
+.skill-paper .m-quiz.ok{border-color:#3aa04b}
+.skill-why{margin:6px 0 0;font-size:14px;color:#324a3f}
+@media(max-width:760px){.skill-grid{grid-template-columns:1fr}}
+.skill-dialog .skill-paper{max-height:none;overflow:visible;padding-right:0}
+.skill-dialog .skill-scale{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.skill-dialog .skill-scale .m-option{min-height:40px;padding:6px 8px;font-size:14px}
+.skill-result{margin:4px 0 12px;padding:10px 14px;border-radius:10px;background:#e7f2ea;border:1px solid #9cc9ad}
+.skill-result p{margin:0 0 6px;font-weight:700}
+.skill-result ul{margin:0 0 8px;padding-left:18px}
+@media(max-width:560px){.skill-dialog .skill-scale{grid-template-columns:repeat(2,minmax(0,1fr))}}

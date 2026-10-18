@@ -119,7 +119,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
   root.append(el('p', {class: 'mission-loading'}, '의뢰 장소로 가는 중…'));
   // 설명 쓰기 문항(writeup)은 의뢰 원본과 따로 온다. 의뢰를 예전 판으로 이어 가는 학생도 같은 문항을 쓴다.
   Promise.all([api('mission?id=' + encodeURIComponent(id) + (ms.contentRevision?'&revision='+encodeURIComponent(ms.contentRevision):'')), api('writeup?id=' + encodeURIComponent(id)).catch(() => null)])
-    .then(([data, w]) => { if (!alive) return; m = data; wu = w?.item ? w : null; ms.contentRevision=data.contentRevision; ms.gameVersion=data.version; save(); if (!ms.seen) intro(); else render(); })
+    .then(([data, w]) => { if (!alive) return; m = data; wu = w?.item ? w : null; ms.contentRevision=data.contentRevision; ms.gameVersion=data.version; save(); const open = ms.openTask; if (open) { delete ms.openTask; ms.seen = true; save(); const k = m.tasks.findIndex((t) => t.id === open); return k >= 0 ? render(k) : render(); } if (!ms.seen) intro(); else render(); })
     .catch(() => { if (alive) root.replaceChildren(el('p', {class: 'mission-loading'}, '의뢰를 불러오지 못했어요. 연결을 확인하고 다시 들어와 주세요.'), button(backLabel, leave)); });
 
   const openDex = (card) => window.dispatchEvent(new CustomEvent('open-dex', {detail: {card}}));

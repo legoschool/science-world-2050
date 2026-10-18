@@ -4,11 +4,11 @@
 // 위쪽 막대의 레벨 칸(C 키)은 「상태」로, 「인벤토리」(I 키)는 「소지품」으로 연다.
 import {STORY_ITEMS, REPAIR} from './npcs.mjs';
 import {itemIcon} from './item-icons.mjs';
-import {BADGES, earnedBadges, explore, fieldDone, dexOf} from './progress.mjs';
+import {BADGES, earnedBadges, explore, fieldDone, dexOf, auraOf, drawAura, nextTitle, AURAS} from './progress.mjs';
 import {WEAR, SLOTS, isOpen, dressSheet, drawPet} from './wardrobe.mjs';
 import {getAvatarSheet, playerAvatar, drawFrame, setPlayerWear} from './sprites.mjs';
 import {renderDex, dexSeen} from './codex.mjs';
-import {renderCompetency} from './competency.mjs';
+import {renderCompetency, abilityPanel} from './competency.mjs';
 
 const REGIONS = [
   {id: 'R1', key: 'farm', name: '햇살 농장 지구', unit: '계절의 변화', color: '#7fd36a', total: 13, fields: 4},
@@ -62,9 +62,10 @@ export function openHero(ctx, tab = 'status', opts = {}) {
   // ---------------------------------------------------------------- 캐릭터 그림
   function avatarCanvas(w = 128, h = 100) {
     const cv = el('canvas', {width: w, height: h, class: 'hero-avatar', role: 'img', 'aria-label': '지금 내 모습'});
-    const x = cv.getContext('2d');
+    const x = cv.getContext('2d'), myAura = auraOf(explore(state, ctx.data()?.quests || [], dexOf(ctx.data())).level);
     const paint = (t) => {
       x.clearRect(0, 0, w, h); x.imageSmoothingEnabled = false;
+      drawAura(x, w / 2, h - 8, myAura, t);
       drawFrame(x, getAvatarSheet(playerAvatar()), w / 2 - 16, h - 8, {dir: 'down', t});
       if (a.wear?.pet) drawPet(x, a.wear.pet, w / 2 + 34, h - 10, t, 'left');
     };
@@ -104,6 +105,7 @@ export function openHero(ctx, tab = 'status', opts = {}) {
       el('p', {class: 'hero-name'}, ctx.who() || '탐험가'),
       el('div', {class: 'hero-level'}, el('span', {class: 'hero-lv'}, 'Lv.' + lv.level), el('strong', {}, lv.title)),
       xp, el('p', {class: 'hero-xp-text'}, `경험치 ${lv.into} / ${lv.per}, 다음 레벨까지 ${lv.per - lv.into}`),
+      ...(() => { const nt = nextTitle(lv.level), na = AURAS.find(([l]) => l > lv.level), au = auraOf(lv.level); return [nt ? el('p', {class: 'hero-xp-text'}, `Lv.${nt[0]}에 칭호 「${nt[1]}」`) : '', au ? el('p', {class: 'hero-xp-text'}, `발밑 빛 고리: ${au[1]}`) : '', na ? el('p', {class: 'hero-xp-text'}, `Lv.${na[0]}에 ${na[1]}`) : '']; })(),
       slots);
     const recent = (story.badges || []).slice(-6).reverse().map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
     if (recent.length) card.append(el('h3', {class: 'hero-card-sub'}, '최근 받은 징표'), el('div', {class: 'hero-medals'}, ...recent.map((b) => el('span', {class: 'hero-medal ' + b.color, title: b.title}, el('i', {'aria-hidden': 'true'}, b.title.slice(0, 1)), el('small', {}, b.title)))));
@@ -131,7 +133,7 @@ export function openHero(ctx, tab = 'status', opts = {}) {
     if (nextWear) goals.append(el('li', {}, el('span', {class: 'hero-goal-k'}, '소품'), `${nextWear.name}: ${nextWear.how} (지금 Lv.${lv.level}, 해결 ${Math.min(wc[nextWear.key] || 0, nextWear.need)}/${nextWear.need})`));
     const nextBadge = BADGES.find((b) => !got.has(b.id));
     if (nextBadge) goals.append(el('li', {}, el('span', {class: 'hero-goal-k'}, '징표'), `${nextBadge.title}: ${nextBadge.how}`));
-    body.append(el('div', {class: 'hero-status'}, card, el('div', {class: 'hero-side'}, stats, record, el('section', {class: 'hero-panel'}, el('h3', {}, '다음 목표'), goals))));
+    body.append(el('div', {class: 'hero-status'}, card, el('div', {class: 'hero-side'}, ctx.api ? abilityPanel({el, button, api: ctx.api, more: () => show('skill')}) : '', stats, record, el('section', {class: 'hero-panel'}, el('h3', {}, '다음 목표'), goals))));
   }
 
   // ---------------------------------------------------------------- 가방

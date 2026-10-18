@@ -23,6 +23,13 @@ export const WEAR = [
   ['pet-starcat', 'pet', '별빛 고양이', {all: 40}],
   ['crown', 'head', '탐험 왕관', {main: 52}],
 ].map(([id, slot, name, need], i) => { const [k, n] = Object.entries(need)[0], lv = id === 'crown' ? 0 : i + 2; return {id, slot, name, key: k, need: n, lv, how: (lv ? `Lv.${lv} 또는 ` : '') + how(k, n)}; });
+// 빛깔 소품: Lv.17 뒤에도 레벨이 오를 때 열린다. 기존 소품 그림에 색을 바꾸는 필터를 씌운다(id의 @ 뒤가 빛깔)
+export const TINTS = {silver: 'grayscale(1) brightness(1.35)', sea: 'hue-rotate(170deg) saturate(1.2)', gold: 'sepia(1) saturate(3) brightness(1.1)', night: 'hue-rotate(200deg) brightness(0.85) saturate(1.4)',
+  dawn: 'hue-rotate(140deg) saturate(1.3) brightness(1.2)', star: 'hue-rotate(220deg) saturate(1.5)', galaxy: 'hue-rotate(250deg) saturate(1.6)', rainbow: 'hue-rotate(280deg) saturate(2)'};
+for (const [id, slot, name, lv] of [['hat-explorer@silver', 'head', '은빛 탐사 모자', 20], ['cape@sea', 'back', '바다빛 망토', 25], ['hardhat@gold', 'head', '금빛 안전모', 30], ['solar-wings@night', 'back', '밤하늘 날개', 35],
+  ['pet-starcat@dawn', 'pet', '새벽빛 고양이', 40], ['beanie@star', 'head', '별빛 털모자', 45], ['pet-drone@galaxy', 'pet', '은하 드론', 50], ['crown@rainbow', 'head', '무지개 왕관', 60]])
+  WEAR.push({id, slot, name, key: 'level', need: lv, lv, how: `Lv.${lv}`});
+const tinted = (c, id, draw) => { const [base, tint] = String(id).split('@'); if (!tint) return draw(base); c.save(); c.filter = TINTS[tint] || 'none'; draw(base); c.restore(); };
 export const wearById = (id) => WEAR.find((w) => w.id === id);
 
 export function countDone(doneIds) {
@@ -193,10 +200,10 @@ export function dressSheet(sheet, wear) {
   for (let r = 0; r < rows; r++) for (let col = 0; col < m.cols; col++) {
     const x0 = col * m.fw, y0 = r * m.fh, dir = ROWS[r] || 'down', a = points[r][col];
     c.save(); c.beginPath(); c.rect(x0, y0, m.fw, m.fh); c.clip(); c.translate(x0, y0);
-    if (a && wear.back) drawBack(c, wear.back, a.tcx, a.ty, a.tw, dir, false);
+    if (a && wear.back) tinted(c, wear.back, (id) => drawBack(c, id, a.tcx, a.ty, a.tw, dir, false));
     c.drawImage(sheet, x0, y0, m.fw, m.fh, 0, 0, m.fw, m.fh);
-    if (a && wear.back) drawBack(c, wear.back, a.tcx, a.ty, a.tw, dir, true);
-    if (a && wear.head) fitHead(c, wear.head, a.cx, a.top, widths[r], dir, m.fw, m.fh);
+    if (a && wear.back) tinted(c, wear.back, (id) => drawBack(c, id, a.tcx, a.ty, a.tw, dir, true));
+    if (a && wear.head) tinted(c, wear.head, (id) => fitHead(c, id, a.cx, a.top, widths[r], dir, m.fw, m.fh));
     c.restore();
   }
   out.meta = m; out.lookKey = (sheet.lookKey || '') + '+' + key;
@@ -207,6 +214,7 @@ export function dressSheet(sheet, wear) {
 // ---------------------------------------------------------------- 따라다니는 동료
 // (x, y)는 발밑 기준점. t는 초 단위 시간. 너비 24점 안팎.
 export function drawPet(c, id, x, y, t, dir) {
+  if (String(id).includes('@')) return tinted(c, id, (base) => drawPet(c, base, x, y, t, dir));
   const p = P(c), bob = Math.round(Math.sin(t * 6) * 1.5), f = dir === 'left' ? -1 : 1;
   c.save(); c.globalAlpha = 0.28; c.fillStyle = '#000'; c.beginPath(); c.ellipse(x, y, 9, 3, 0, 0, Math.PI * 2); c.fill(); c.restore();
   if (id === 'pet-sprout') {

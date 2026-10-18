@@ -91,7 +91,7 @@ export function adventureHUD({el, button, state, api, save, go, route, pending, 
     if (questTab === 'weekly') { const box = el('div', {class: 'weekly-box'}); dialog.append(box); showWeekly({el, box, data: weekly}); return; }
     if (!data) { dialog.append(el('p', {}, '연결 상태를 확인한 뒤 다시 열어 주세요.')); return; }
     if (!a.welcomed) dialog.append(el('p', {class: 'quest-story'}, '지금 할 일: ' + (quick ? '의뢰 고르기 판에서 의뢰를 하나 골라요' : state.story?.hint || '중앙 광장에서 신항이를 만나 보세요')));
-    if (!quick) dialog.append(button('복구할 지역 고르기',showRegions,'secondary'));
+    dialog.append(el('div', {class: 'quest-tools'}, button('오늘의 탐구', () => { dialog.close(); window.dispatchEvent(new Event('open-daily')); }, 'secondary'), button('도전 게시판', () => { dialog.close(); window.dispatchEvent(new Event('open-challenges')); }, 'secondary'), quick ? '' : button('복구할 지역 고르기', showRegions, 'secondary')));
     if (allDone()) dialog.append(el('p', {class: 'quest-story'}, '네 지구 의뢰 52개를 모두 해결했어요. ', button('엔딩 다시 보기', () => { dialog.close(); openEnding(); })));
     for (const q of [...data.quests].sort((x, y) => x.id.localeCompare(y.id))) {
       const info = questInfo(q.id), steps = questSteps(q.id, state, stepProgress), doneCount = steps.filter(Boolean).length;

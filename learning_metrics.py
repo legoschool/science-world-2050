@@ -22,7 +22,7 @@ ERROR_MESSAGES = {'save_failed':'기록 저장 요청 실패', 'activity_failed'
 OPERATIONS = {'state','events','mission-check','writeup-check','discovery-check','answer-check','mission','writeup','discovery','other'}
 ROOT=Path(__file__).resolve().parent
 REGION_PREFIX={'R1':'farm','R2':'fire','R3':'power','R4':'future','R5':'life'}
-PACE_KINDS=('pace.chosen','pace.entered','competency.checked') # 길 고르기와 역량 점검은 의뢰 응답 집계에 넣지 않는다
+PACE_KINDS=('pace.chosen','pace.entered','competency.checked','daily.answered') # 길 고르기와 역량 점검은 의뢰 응답 집계에 넣지 않는다
 PACE_LABELS={'story':'이야기 모두 보기','quick':'빠르게 문제만'}
 CUSTOM_MAPS={'power-lab':('R3-G04',None),'g05-intro':('R3-G05','intro'),'motor-workshop':('R3-G05','motor'),'buzzer-workshop':('R3-G05','buzzer'),'deduction-workshop':('R3-G05','deduction'),'application-workshop':('R3-G05','application'),'workshop-summary':('R3-G05','closure'),'magnet-workshop':('R3-G06',None),'crane-workshop':('R3-G07',None)}
 

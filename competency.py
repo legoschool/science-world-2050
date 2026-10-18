@@ -82,7 +82,7 @@ def profile(missions, events, social, fields, until=None):
     tasks = {}  # (게임, 과제) -> {'first': bool|None, 'ok': bool, 'helped': bool, 'wrong': bool, 'tags': set, 'optional': bool, 'log': bool, 'action': bool}
     helps = set()
     started, completed, reflected, predicted, transfers, transfer_ok, writeups, revisions, closures, questions, experiments, completed_q = set(), set(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    asked = 0
+    daily_n, daily_ok, daily_days = 0, 0, set()
     for kind, at, p in events:
         gid = p.get('gameId') or ''
         tid = str(p.get('taskId') or '').split('.')[-1]
@@ -106,6 +106,9 @@ def profile(missions, events, social, fields, until=None):
             if correct is not False and not rec['ok']:
                 rec['ok'] = True
                 rec['helped'] = rec['helped'] or key in helps
+            continue
+        if kind == 'daily.answered':
+            daily_n += 1; daily_ok += int(p.get('correct') is True); daily_days.add(p.get('date'))
             continue
         if kind == 'mission.completed':
             completed.add(gid)
@@ -163,11 +166,11 @@ def profile(missions, events, social, fields, until=None):
     action_done = sum(1 for r in tasks.values() if r['action'] and r['ok'])
     n_social, n_field = len(social), len(fields)
     comp = {
-        'think': blend([(q_think * (0.4 + 0.6 * ramp(n_think, 40)), 0.8, '개념 문제', n_think), (ramp(transfer_ok, 6), 0.2, '새 조건 문제를 맞힘', transfer_ok)]),
+        'think': blend([(q_think * (0.4 + 0.6 * ramp(n_think, 40)), 0.7, '개념 문제', n_think), (ramp(transfer_ok, 6), 0.15, '새 조건 문제를 맞힘', transfer_ok), ((daily_ok / daily_n if daily_n else 0) * ramp(daily_n, 15), 0.15, '오늘의 탐구 정답', daily_ok)]),
         'inquiry': blend([(q_inq * (0.4 + 0.6 * ramp(n_inq, 25)), 0.5, '실험 장면 단계', n_inq), (ramp(predicted, 12), 0.25, '실험 전 예상', predicted), (ramp(experiments, 30), 0.25, '전용 실험 조작', experiments)]),
         'solve': blend([((transfer_ok / transfers if transfers else 0) * ramp(transfers, 6), 0.35, '새 조건 문제', transfers), (ramp(len(completed), 20), 0.45, '해결한 의뢰', len(completed)), (q_solve * ramp(n_solve, 4), 0.2, '계획 세우기', n_solve)]),
         'comm': blend([(ramp(writeups + closures, 4), 0.3, '설명 쓰기', writeups + closures), (q_comm * ramp(n_comm, 8), 0.3, '글로 답하기', n_comm), (ramp(n_social, 6), 0.2, '게시판 글과 답', n_social), (ramp(completed_q, 10), 0.2, '의뢰를 마치며 남긴 말', completed_q)]),
-        'engage': blend([(ramp(n_field, 8), 0.35, '현장 활동', n_field), (ramp(optional_done, 15), 0.3, '더 해보기', optional_done), (ramp(log_done, 3), 0.15, '실천 기록', log_done), (ramp(questions, 4), 0.2, '스스로 남긴 질문', questions)]),
+        'engage': blend([(ramp(n_field, 8), 0.35, '현장 활동', n_field), (ramp(optional_done, 15), 0.3, '더 해보기', optional_done), (ramp(log_done, 3), 0.15, '실천 기록', log_done), (ramp(questions, 4), 0.1, '스스로 남긴 질문', questions), (ramp(len(daily_days), 10), 0.1, '오늘의 탐구에 들어온 날', len(daily_days))]),
         'attitude': blend([(ramp(reflected, 10), 0.35, '결과 보고 돌아보기', reflected), ((recovered / len(wrongs) if wrongs else 0) * ramp(len(wrongs), 8), 0.45, '틀린 뒤 끝까지 다시 해결', recovered), (ramp(revisions, 2), 0.2, '설명 고쳐 쓰기', revisions)]),
     }
     tend = {
@@ -239,3 +242,28 @@ def grade(root, form, rates, answers):
         right[it['code']] += int(ok)
         review.append({'id': it['id'], 'ok': ok, 'key': it['key'], 'why': it['why']})
     return {'form': form, 'version': b['version'], 'rates': rates, 'answers': answers, 'right': right, 'total': total}, review
+
+
+TIPS = {'think': '개념 문제를 도움 없이 먼저 풀어 보고, 오늘의 탐구로 끝낸 의뢰를 다시 떠올려 봐요.',
+        'inquiry': '실험 장면이 있는 의뢰에서 예상을 먼저 남기고 직접 실험해 봐요.',
+        'solve': '의뢰를 끝까지 해결하고, 마무리 뒤 새 조건 문제에 도전해 봐요.',
+        'comm': '설명 쓰기와 반 친구 게시판에 내 생각을 증거와 함께 써 봐요.',
+        'engage': '구역 현장 활동과 더 해보기, 실천 기록에 참여해 봐요.',
+        'attitude': '결과를 보고 내 생각을 돌아보고, 틀린 단계는 끝까지 다시 풀어 봐요.'}
+
+
+def suggest(missions, events, prof):
+    """가장 낮은 역량 하나와 그 역량을 많이 쓰는 아직 끝내지 않은 의뢰 세 개."""
+    order = ['think', 'inquiry', 'solve', 'comm', 'engage', 'attitude']
+    code = min(order, key=lambda c: (prof['competencies'][c]['score'], order.index(c)))
+    done = {p.get('gameId') for k, _, p in events if k == 'mission.completed'}
+    def weight(m):
+        req = [t for t in m['tasks'] if not (t.get('optional') or t.get('required') is False)]
+        tags = [task_tags(t) for t in req]
+        w = sum(code in g for g in tags)
+        if code in ('inquiry', 'attitude'): w += 2 * sum(1 for t in req if t.get('predict'))
+        if code in ('solve', 'think', 'attitude') and m.get('transfer'): w += 3
+        if code == 'engage': w += len([t for t in m['tasks'] if t.get('optional') or t.get('required') is False]) // 3 + 2 * sum(1 for t in m['tasks'] if t.get('log'))
+        return w
+    ranked = sorted((g for g in missions if g not in done and g != 'R5-G10'), key=lambda g: (-weight(missions[g]), g))[:3]
+    return {'code': code, 'tip': TIPS[code], 'missions': [{'id': g, 'title': missions[g].get('title', g)} for g in ranked]}

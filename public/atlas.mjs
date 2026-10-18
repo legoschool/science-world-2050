@@ -11,6 +11,7 @@ import {getAvatarSheet, FW, FH, ANCHOR, frameFor, getPortrait, playerAvatar, dra
 import {DEFAULT_NPCS, STORY_ITEMS, QUEST_REWARDS, PICKUPS, REPAIR} from './npcs.mjs';
 import {openRepair} from './repair.mjs';
 import {QUESTS, questSteps, SIDE_QUESTS, MISSIONS, loadMissions} from './quests.mjs';
+import {explore, auraOf, drawAura} from './progress.mjs';
 import {loadSheet} from './npc-sheets.mjs';
 import {holdButtons, typingMs, READ_MS} from './read-gate.mjs';
 import {sfx, music} from './sound.mjs';
@@ -300,7 +301,7 @@ export function atlas(host, travel, opts) {
   root.append(canvas, locBadge, mini, skip, speech);
 
   let cancelled = false, alive = true, raf = 0, last = performance.now(), locked = false, pending = null, path = [], keys = new Set(), dir = 'down', camX = 0, camY = 0, gateArmed = true, running = false;
-  let progress = {quests: []}, npcs = [], S = null, ground = null, walkGrid = null, miniBg = null, targets = [], buttons = [];
+  let aura = null, progress = {quests: []}, npcs = [], S = null, ground = null, walkGrid = null, miniBg = null, targets = [], buttons = [];
   // 선생님이 관리 화면에서 올린 자료. 학습 장소를 고른 자료는 그 장소에 말을 걸 때 함께 연다.
   let teacherRes = [];
   // 구역 현장 활동(field.json)과 지역 이야기·주민(world-extra.json)
@@ -971,7 +972,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
   }
   // 광장 게시판: 반 친구 게시판(질문과 결과 나누기)과 탐구대 소식
   function showBoard() {
-    say({name: '마을 게시판'}, ['반 친구들이 남긴 질문과 결과 쪽지가 붙어 있다. 한쪽에는 지역마다 필요한 도움이 적혀 있다.'], [['복구할 지역 고르기',()=>introDone()?chooseJourney():finishIntro()], ...(setPace ? [['빠르게 문제만', () => { close(); checkpoint(); setPace('quick'); }]] : []), ['반 친구 게시판 보기', () => { close(); keys.clear(); path = []; window.dispatchEvent(new Event('open-class-board')); }], ['탐구대 소식 보기', () => { close(); showNews(); }], ['돌아가기', close]]);
+    say({name: '마을 게시판'}, ['반 친구들이 남긴 질문과 결과 쪽지가 붙어 있다. 한쪽에는 지역마다 필요한 도움이 적혀 있다.'], [['복구할 지역 고르기',()=>introDone()?chooseJourney():finishIntro()], ...(setPace ? [['빠르게 문제만', () => { close(); checkpoint(); setPace('quick'); }]] : []), ['오늘의 탐구', () => { close(); window.dispatchEvent(new Event('open-daily')); }], ['도전 게시판', () => { close(); window.dispatchEvent(new Event('open-challenges')); }], ['반 친구 게시판 보기', () => { close(); keys.clear(); path = []; window.dispatchEvent(new Event('open-class-board')); }], ['탐구대 소식 보기', () => { close(); showNews(); }], ['돌아가기', close]]);
   }
   function showNews() {
     const names = {'R3-G04': '관리실 빛 자물쇠', 'R3-G05': '가린 회로 추리', 'R3-G06': '부두 전자석 공방', 'R3-G07': '고철 부두 크레인'};
@@ -1319,7 +1320,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     for (const d of fieldDecor) if (inView(d.x, d.y)) layers.push({y: d.y, paint: () => drawFieldItem(c, d, d.x, d.y, 2.2)});
     for (const it of fieldItems) { it.dist = Math.hypot(it.x - x, it.y - y); if (it.dist < SEE_NEAR) { it.seen = true; layers.push({y: it.y, paint: () => drawFieldItem(c, it, it.x, it.y, 1.6)}); } }
     const hero = heroSheet();
-    layers.push({y, paint: () => drawChar(c, hero, x, y, dir, moving, tt)});
+    layers.push({y, paint: () => { drawAura(c, x, y, aura, tt); drawChar(c, hero, x, y, dir, moving, tt); }});
     const pet = playerWear().pet;
     if (pet) { followPet(); layers.push({y: petPos.y, paint: () => drawPet(c, pet, petPos.x, petPos.y, tt, petPos.dir)}); }
     layers.sort((a, b) => a.y - b.y).forEach((l) => l.paint());
@@ -1400,6 +1401,7 @@ ${mi.goal}`, withRes(t.id, [[done ? '다시 들어가기' : '조사 시작하기
     if (!alive) return;
     teacherRes = (resData?.resources || []).filter((r) => r.published);
     progress = prog || {quests: []}; markLoaded?.();
+    aura = auraOf(explore(state, progress.quests).level); // Lv.20부터 발밑 빛 고리
     ctxSignOn = !!story.repaired;
     signState = ctxSignOn ? 'on' : 'off';
     S = loc === 'hub' ? buildHub({signOn: ctxSignOn}) : buildRegion(loc, regionKey, zone ? zone.games : region.zones.map((z) => ({title: z.title, map: z.id})), !!zone, {signOn: questDone('R3-G04'), lifeLit: questDone('R5-G04'), lifeArm: questDone('R5-G01'), lifeHay: questDone('R5-G07'), lifeWind: questDone('R5-G08'), lifeMap: questDone('R5-G02'), lifeClinic: questDone('R5-G03'), lifeBeam: questDone('R5-G05'), lifeLens: questDone('R5-G06'), lifeHouse: questDone('R5-G09')});

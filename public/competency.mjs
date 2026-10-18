@@ -4,10 +4,10 @@ const NS = 'http://www.w3.org/2000/svg';
 const svg = (tag, attrs = {}, ...kids) => { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); kids.forEach((k) => k && n.append(k)); return n; };
 
 // axes: [{label}], layers: [{values: [0~100], cls}]
-export function radar(axes, layers, {size = 300, title = ''} = {}) {
+export function radar(axes, layers, {size = 300, title = '', pad = 0} = {}) {
   const c = size / 2, r = size * 0.32, n = axes.length;
   const at = (k, v) => { const a = -Math.PI / 2 + (2 * Math.PI * k) / n; return [c + Math.cos(a) * r * v, c + Math.sin(a) * r * v]; };
-  const root = svg('svg', {viewBox: `0 0 ${size} ${size}`, class: 'radar', role: 'img', 'aria-label': title + ': ' + axes.map((x, k) => `${x.label} ${layers.at(-1)?.values[k] ?? 0}`).join(', ')});
+  const root = svg('svg', {viewBox: `${-pad} 0 ${size + 2 * pad} ${size}`, class: 'radar', role: 'img', 'aria-label': title + ': ' + axes.map((x, k) => `${x.label} ${layers.at(-1)?.values[k] ?? 0}`).join(', ')});
   for (const ring of [0.25, 0.5, 0.75, 1]) root.append(svg('polygon', {class: 'radar-ring', points: axes.map((_, k) => at(k, ring).join(',')).join(' ')}));
   axes.forEach((x, k) => {
     const [px, py] = at(k, 1), [lx, ly] = at(k, 1.26);
@@ -101,4 +101,22 @@ export async function openCheck({el, button, api, onDone = () => {}}) {
     el('div', {class: 'skill-paper'}, el('h3', {}, '나를 돌아봐요'), ...rateRows, el('h3', {}, '상황 문제'), ...itemRows, fb, send));
   d.addEventListener('close', () => { d.remove(); onDone(); }, {once: true});
   document.body.append(d); d.showModal();
+}
+
+// 탐험가 능력치: 「상태」 칸에 붙는 작은 역량 육각형, 역량별 별(0~5), 다음에 키울 역량과 추천 의뢰
+export const starsOf = (score) => (score >= 90 ? 5 : score >= 70 ? 4 : score >= 50 ? 3 : score >= 30 ? 2 : score > 0 ? 1 : 0);
+export function abilityPanel({el, button, api, more}) {
+  const box = el('section', {class: 'hero-panel ability'}, el('h3', {}, '탐험가 능력치'), el('p', {class: 'skill-msg'}, '능력치를 불러오고 있어요.'));
+  api('my-competency').then((d) => {
+    const now = d.profile.competencies, comp = d.competencies;
+    const best = [...comp].sort((a, b) => now[b.id].score - now[a.id].score)[0];
+    const rows = el('ul', {class: 'ability-rows'}, comp.map((x) => { const n = starsOf(now[x.id].score); return el('li', {}, el('span', {}, x.short), el('b', {class: 'hero-stars', role: 'img', 'aria-label': `별 5개 중 ${n}개`}, '★'.repeat(n), el('span', {class: 'dim'}, '★'.repeat(5 - n)))); }));
+    const sug = d.suggest, weak = comp.find((x) => x.id === sug?.code);
+    box.replaceChildren(el('h3', {}, '탐험가 능력치'),
+      el('div', {class: 'ability-top'}, el('div', {class: 'ability-chart'}, radar(comp.map((x) => ({label: x.short})), [{values: comp.map((x) => now[x.id].score), cls: 'now'}], {size: 200, pad: 36, title: '탐험가 능력치'})), rows),
+      now[best.id].score ? el('p', {class: 'ability-best'}, `가장 자란 능력치: ${best.short}`) : el('p', {class: 'skill-msg'}, '의뢰를 풀면 능력치가 자라요.'),
+      weak ? el('div', {class: 'ability-next'}, el('strong', {}, `다음에 키울 능력치: ${weak.short}`), el('p', {}, sug.tip), sug.missions.length ? el('p', {}, '추천 의뢰: ' + sug.missions.map((m) => m.title).join(', ')) : '') : '',
+      more ? button('역량 칸에서 자세히 보기', more, 'secondary') : '');
+  }).catch(() => box.replaceChildren(el('h3', {}, '탐험가 능력치'), el('p', {class: 'skill-msg'}, '능력치를 불러오지 못했어요.')));
+  return box;
 }

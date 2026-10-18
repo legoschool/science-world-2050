@@ -11,14 +11,14 @@ const EXTRA = {life: [['북쪽 자매 마을', ['R5-G10']]]};
 let lastTab = {run: '', key: ''};
 const batchim = (w) => { const c = String(w).charCodeAt(String(w).length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 !== 0; };
 
-export function quickBoard(host, {el, button, state, api, onEnter, onRecord}) {
+export function quickBoard(host, {el, button, state, api, onEnter, onRecord, onDaily, onChallenges}) {
   let alive = true, quests = [], progress = {}, regions = null;
   const adv = state.adventure ??= {welcomed: false, tracked: 'R3-G04'};
   const root = el('section', {class: 'quick-board', 'aria-label': '의뢰 고르기'});
   const total = el('span', {class: 'qb-total'});
   const tabs = el('div', {class: 'qb-tabs', role: 'tablist', 'aria-label': '지역'});
   const list = el('div', {class: 'qb-list'});
-  root.append(el('div', {class: 'qb-head', 'data-no-gloss': ''}, el('h1', {}, '의뢰 고르기'), total), tabs, list);
+  root.append(el('div', {class: 'qb-head', 'data-no-gloss': ''}, el('h1', {}, '의뢰 고르기'), total, el('span', {class: 'qb-head-tools'}, onDaily ? button('오늘의 탐구', onDaily, 'qb-tool') : '', onChallenges ? button('도전 게시판', onChallenges, 'qb-tool') : '')), tabs, list);
   host.replaceChildren(root);
   list.append(el('p', {class: 'qb-loading'}, '의뢰를 불러오고 있어요.'));
   const get = (url) => fetch(url, {credentials: 'same-origin'}).then((r) => (r.ok ? r.json() : null)).catch(() => null);

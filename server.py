@@ -19,6 +19,7 @@ import writeup
 import answer_support
 import learning_metrics
 import competency
+import play
 import learning_reset
 import textbook
 REQUEST_LEARNING_EPOCH=ContextVar('request_learning_epoch',default=None)
@@ -407,7 +408,8 @@ def class_students(c,cid):
         out.append(dict(id=a['id'],number=a['number'],nickname=a['nickname'],active=a['active']!=0,avatar=public_user(a)['avatar'],lastActive=s['last'] if s else None,eventCount=s['n'] if s else 0,quests={'R3-G04':bool(s and s['g4']),'R3-G05':bool(s and s['g5']),'R3-G06':bool(s and s['g6'])},regions=[dict(id=k,title=t,done=len(finished.get(a['id'],set())&set(g)),total=len(g)) for k,t,g in region_games()]))
     return out
 # public/wardrobe.mjs 의 WEAR id와 같게 유지한다
-WEAR_IDS={'hat-explorer','bag','hat-straw','goggles','hardhat','headphones','cap','pet-drone','pet-sprout','pet-salamander','pet-robot','beanie','cape','cat-ears','solar-wings','pet-starcat','crown'}
+WEAR_IDS={'hat-explorer','bag','hat-straw','goggles','hardhat','headphones','cap','pet-drone','pet-sprout','pet-salamander','pet-robot','beanie','cape','cat-ears','solar-wings','pet-starcat','crown',
+          'hat-explorer@silver','cape@sea','hardhat@gold','solar-wings@night','pet-starcat@dawn','beanie@star','pet-drone@galaxy','crown@rainbow'} # @뒤는 레벨 60까지 이어지는 빛깔 소품
 REPORT_KINDS={'error','hard','idea','other'}
 REPORT_CONTEXT={'view','map','place','gameId','taskId','title','screen','agent','sync','url'}
 def report_row(r):
@@ -1801,7 +1803,23 @@ class Handler(BaseHTTPRequestHandler):
                 if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
                 with conn() as c:ev,so,fi=competency.load(c,u['id'])
                 b=competency.bank(ROOT);pr=competency.profile(missions(),ev,so,fi)
-                return self.send_json(200,{'competencies':b['competencies'],'tendencies':b['tendencies'],'profile':pr,'growth':competency.growth(missions(),ev,so,fi),'checks':competency.checks(ev,ROOT),'nextForm':competency.next_form(ev)})
+                return self.send_json(200,{'competencies':b['competencies'],'tendencies':b['tendencies'],'profile':pr,'growth':competency.growth(missions(),ev,so,fi),'checks':competency.checks(ev,ROOT),'nextForm':competency.next_form(ev),'suggest':competency.suggest(missions(),ev,pr)})
+            if path=='/api/daily':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                with conn() as c:ev,_,_=competency.load(c,u['id'])
+                day,chosen=play.pick(missions(),u['id'],ev);done=play.answered(ev,day)
+                items=[]
+                for g,t in chosen:
+                    it=play.public_item(missions(),g,t,u['id']);r=done.get(it['ref'])
+                    if r:it.update(answered=r,**play.reveal(missions(),g,t))
+                    items.append(it)
+                return self.send_json(200,{'date':day,'items':items})
+            if path=='/api/challenges':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                run=query.get('runId',[''])[0]
+                with conn() as c:ev,_,_=competency.load(c,u['id'])
+                cards=lambda g,t:[{'name':x['name'],'bonus':bool(x.get('bonus'))} for x in dex_conf()['cards'] if g+'.'+t in x['at']]
+                return self.send_json(200,{'missions':play.challenges(missions(),ev,run,cards)})
             if path=='/api/competency-check':
                 if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
                 with conn() as c:ev,_,_=competency.load(c,u['id'])
@@ -2511,6 +2529,20 @@ class Handler(BaseHTTPRequestHandler):
                 r=validate_event(event)
                 if r.get('evaluation')=='version_unavailable':raise ValueError('의뢰 자료가 바뀌었어요. 의뢰를 다시 열어 주세요.')
                 return self.send_json(200,{k:r[k] for k in ('matched','actualLabel','observed','correct','feedback','evaluation') if k in r})
+            if path=='/api/daily':
+                if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
+                if set(data)-{'gameId','taskId','answer'} or not all(isinstance(data.get(k),str) for k in ('gameId','taskId','answer')):raise ValueError('답을 다시 골라 주세요.')
+                now=time.time()
+                with conn() as c:
+                    ev,_,_=competency.load(c,u['id']);day,chosen=play.pick(missions(),u['id'],ev,now)
+                    if (data['gameId'],data['taskId']) not in chosen:raise Invalid('오늘의 탐구 문제가 바뀌었어요. 창을 다시 열어 주세요.')
+                    got=play.reveal(missions(),data['gameId'],data['taskId']);prev=play.answered(ev,day).get(data['gameId']+'.'+data['taskId'])
+                    if prev:return self.send_json(200,{'correct':prev['correct'],'already':True,**got})
+                    t=next(x for x in missions()[data['gameId']]['tasks'] if x['id']==data['taskId'])
+                    if data['answer'] not in {o['id'] for o in t['options']}:raise ValueError('보기에 없는 답이에요.')
+                    ok=data['answer']==got['key']
+                    c.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?)',(secrets.token_hex(16),u['id'],play.DAILY_KIND,'daily',time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(now)),now,json.dumps({'gameId':data['gameId'],'taskId':data['taskId'],'answer':data['answer'],'correct':ok,'date':day},ensure_ascii=False)))
+                return self.send_json(200,{'correct':ok,'already':False,**got})
             if path=='/api/competency-check':
                 # 역량 점검: 자기 평가 여섯과 상황 문제 열둘을 한꺼번에 받아 채점하고 기록한다(학생 기기는 정답을 받지 않는다)
                 if u['role']!='student':return self.send_json(403,{'error':'학생 화면에서 볼 수 있어요.'})
@@ -2680,7 +2712,7 @@ class Handler(BaseHTTPRequestHandler):
                 if 'runVersion' in state and state['runVersion'] not in ['g04-slice-4','g04-slice-5','g04-slice-6','g04-slice-7','g04-slice-8']:raise ValueError('버전 오류')
                 if 'adventure' in state:
                     a=state['adventure']
-                    if not isinstance(a,dict) or not {'welcomed','tracked'}<=set(a) or set(a)-{'welcomed','tracked','selectedRegion','regionTracks','storyItems','wear','seenWear','regionsDone','ended','field','scenes','duels','pace','paceAt','quickIntro','storyMap'} or type(a['welcomed'])is not bool or str(a['tracked']) not in state_games():raise ValueError('모험 기록 오류')
+                    if not isinstance(a,dict) or not {'welcomed','tracked'}<=set(a) or set(a)-{'welcomed','tracked','selectedRegion','regionTracks','storyItems','wear','seenWear','regionsDone','ended','field','scenes','duels','pace','paceAt','quickIntro','storyMap','dailyExp'} or type(a['welcomed'])is not bool or str(a['tracked']) not in state_games():raise ValueError('모험 기록 오류')
                     region_prefix={'farm':'R1-','fire':'R2-','power':'R3-','future':'R4-','life':'R5-'}
                     if 'selectedRegion' in a and (not isinstance(a['selectedRegion'],str) or a['selectedRegion'] not in region_prefix):raise ValueError('탐험할 지역을 확인해 주세요.')
                     tracks=a.get('regionTracks',{})
@@ -2697,6 +2729,7 @@ class Handler(BaseHTTPRequestHandler):
                     if 'pace' in a and a['pace'] not in PACES:raise ValueError('고른 길을 확인해 주세요.')
                     if 'paceAt' in a and (type(a['paceAt']) not in (int,float) or a['paceAt']<0):raise ValueError('고른 길을 확인해 주세요.')
                     if 'quickIntro' in a and type(a['quickIntro']) is not bool:raise ValueError('고른 길을 확인해 주세요.')
+                    if 'dailyExp' in a and (type(a['dailyExp']) is not int or not 0<=a['dailyExp']<=200000):raise ValueError('오늘의 탐구 기록을 확인해 주세요.')
                     if 'storyMap' in a and a['storyMap'] not in {'hub',*region_keys(),'power-lab',*zone_ids()}:raise ValueError('고른 길을 확인해 주세요.')
                     # 구역 현장 활동(public/field.json): {구역: {on, got: [물건 id], set: {장치 id: 상태 번호}, done}}
                     field=a.get('field',{})

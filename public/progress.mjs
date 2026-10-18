@@ -61,6 +61,15 @@ export function earnedBadges(state, quests, dex = null) {
 }
 
 export const LEVEL_TITLES = ['초보 탐구자', '견습 탐구자', '탐구자', '숙련 탐구자', '베테랑 탐구자', '새빛시의 탐구 영웅'];
+// Lv.6 뒤에도 칭호가 이어진다(필수 단계만 풀어도 Lv.60 안팎까지 오른다). [이 레벨부터, 칭호]
+export const LEVEL_BANDS = [[1, '초보 탐구자'], [2, '견습 탐구자'], [3, '탐구자'], [4, '숙련 탐구자'], [5, '베테랑 탐구자'], [6, '새빛시의 탐구 영웅'],
+  [10, '별빛 연구원'], [15, '은하 연구원'], [20, '새빛시 수석 연구원'], [25, '미래 과학 탐험대장'], [30, '2050 수호자'], [40, '새빛시의 전설'],
+  [50, '과학의 별'], [60, '시간을 건넌 탐험가'], [70, '미래를 바꾼 탐험가'], [80, '새빛시의 빛']];
+export const levelTitle = (level) => LEVEL_BANDS.filter(([lv]) => level >= lv).at(-1)[1];
+export const nextTitle = (level) => LEVEL_BANDS.find(([lv]) => lv > level) || null;
+// 빛 고리: Lv.20부터 캐릭터 발밑에 빛나는 고리. 레벨이 오를수록 색이 바뀐다
+export const AURAS = [[20, '청록 빛 고리', '#4fe0c8'], [30, '은빛 고리', '#dfe8ff'], [40, '금빛 고리', '#ffd36e'], [50, '노을빛 고리', '#ff8a5c'], [60, '무지개 고리', 'rainbow']];
+export const auraOf = (level) => AURAS.filter(([lv]) => level >= lv).at(-1) || null;
 const PER_LEVEL = 120;
 
 export function explore(state, quests, dex = null) {
@@ -77,6 +86,18 @@ export function explore(state, quests, dex = null) {
   // 공용 의뢰 화면에서 푼 과제(이번 모험 회차)와 해결한 의뢰도 경험치가 된다
   for (const m of Object.values(state.missions || {})) if (m && m.run === state.runId) exp += Object.values(m.done || {}).filter((v) => v && v !== 'skip').length * 5;
   exp += (quests || []).filter((q) => q.status === 'completed' && !['R3-G04', 'R3-G05', 'R3-G06', 'R3-G07'].includes(q.id)).length * 40;
+  exp += Math.max(0, Math.min(200000, state.adventure?.dailyExp || 0)); // 오늘의 탐구(맞히면 10, 답하면 3)
   const level = 1 + Math.floor(exp / PER_LEVEL);
-  return {exp, level, into: exp % PER_LEVEL, per: PER_LEVEL, title: LEVEL_TITLES[Math.min(level, LEVEL_TITLES.length) - 1]};
+  return {exp, level, into: exp % PER_LEVEL, per: PER_LEVEL, title: levelTitle(level)};
+}
+
+// 빛 고리 그리기: 발밑 (x, y)에 납작한 고리. rainbow는 시간에 따라 색이 돈다
+export function drawAura(c, x, y, aura, t = 0) {
+  if (!aura) return;
+  const color = aura[2] === 'rainbow' ? `hsl(${Math.floor(t * 60) % 360} 90% 65%)` : aura[2];
+  c.save();
+  c.globalAlpha = 0.35 + 0.15 * Math.sin(t * 3);
+  c.fillStyle = color; c.beginPath(); c.ellipse(x, y, 17, 6, 0, 0, Math.PI * 2); c.fill();
+  c.globalAlpha = 0.9; c.strokeStyle = color; c.lineWidth = 2; c.beginPath(); c.ellipse(x, y, 16, 5.5, 0, 0, Math.PI * 2); c.stroke();
+  c.restore();
 }

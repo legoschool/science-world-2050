@@ -1330,3 +1330,12 @@ button.qb-place.done{background:#fff;color:var(--green);border-color:var(--line)
 /* 의뢰 마무리 화면도 단추 줄(의뢰 고르기로, 지도로 돌아가기)을 놀이 화면 아래에 붙인다. overflow:hidden은 붙기를 막아 clip으로 둔다 */
 body.game-view .mission-finish{overflow:clip}
 body.game-view .mission-finish-body>.m-actions{position:sticky;bottom:0;z-index:3;margin:6px -20px -20px;padding:10px 20px;background:rgba(240,245,251,.96);border-top:1px solid #c9d4e2;flex-wrap:wrap}
+/* 교과서 쉽게 보기: 쪽 그림 오른쪽(좁으면 아래)에 쪽마다 쉬운 설명과 먼저 볼 곳 */
+.textbook-body{flex:1;min-height:0;display:flex}
+.textbook-easy{flex:0 0 min(320px,32%);overflow:auto;padding:14px 16px;background:#fffdf5;border-left:1px solid #d8dfd6;font-size:16px;line-height:1.7}
+.textbook-easy h3{margin:0 0 8px;font-size:17px;color:#1b6353}
+.textbook-easy p{margin:0 0 10px}
+.textbook-look{padding:8px 10px;border-radius:8px;background:#fff1c2;color:#4a3a10}
+.textbook-look strong{display:block;font-size:14px;color:#6a4a00}
+.textbook-easy-toggle[aria-pressed=true]{background:#1b6353;color:#fff;border-color:#1b6353}
+@media(max-width:760px){.textbook-body{flex-direction:column}.textbook-easy{flex:0 0 auto;max-height:40%;border-left:0;border-top:1px solid #d8dfd6}}

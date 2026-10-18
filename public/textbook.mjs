@@ -3,6 +3,7 @@
 // 출판사 저작물이라 학생 기기에 남기지 않는다: 서버가 no-store로 보내고, 여기서도 no-store로 받아 화면에 띄운 뒤 쪽을 넘기거나 닫으면 그림 주소를 바로 지운다.
 const SOURCE = '천재교과서(정용재)';
 let openNow = null;
+let easyOn = true; // 쉽게 보기 칸(쪽마다 쉬운 설명과 먼저 볼 곳). 학생이 끄면 이 창을 다시 열 때도 끈 채로 둔다
 const lastSeen = {}; // 의뢰마다 마지막으로 본 쪽과 보기 방식. 닫고 문제를 푼 뒤 다시 열면 보던 쪽부터 이어 본다(새로 고침하면 처음부터)
 
 // start: {kind: '과학'|'실험관찰', page: 68} 처럼 처음 펼칠 쪽(없으면 첫 묶음 첫 쪽)
@@ -20,7 +21,9 @@ export function openTextbook({el, button, api, mission, start = null, onClose = 
   const next = button('뒤쪽', () => go(at + 1), 'secondary');
   const zoom = button('쪽 전체 보기', () => { big = !big; paint(); }, 'secondary');
   const close = button('닫기', () => finish(), 'secondary');
-  dialog.append(el('div', {class: 'textbook-head'}, title, pick, close), tabs, stage, el('div', {class: 'textbook-foot'}, prev, where, next, zoom, source));
+  const easyBox = el('aside', {class: 'textbook-easy', 'aria-label': '쉽게 보기'});
+  const easyBtn = button('쉽게 보기', () => { easyOn = !easyOn; paint(); }, 'secondary textbook-easy-toggle');
+  dialog.append(el('div', {class: 'textbook-head'}, title, pick, close), tabs, el('div', {class: 'textbook-body'}, stage, easyBox), el('div', {class: 'textbook-foot'}, prev, where, next, zoom, easyBtn, source));
   document.body.append(dialog);
   openNow = dialog;
   let data = null, flat = [], at = 0, shown = '', ticket = 0, gid = mission, big = start ? true : (lastSeen[mission]?.big ?? true); // 처음에는 글자가 읽히는 너비로 펼친다
@@ -59,6 +62,10 @@ export function openTextbook({el, button, api, mission, start = null, onClose = 
     where.textContent = `${sec.title} ${/^\d/.test(page.n) ? page.n + '쪽' : page.n} (${at + 1}/${flat.length})`;
     prev.disabled = at === 0; next.disabled = at === flat.length - 1;
     zoom.textContent = big ? '쪽 전체 보기' : '크게 보기';
+    const note = page.easy;
+    easyBtn.hidden = !note; easyBtn.setAttribute('aria-pressed', String(!!note && easyOn));
+    easyBox.hidden = !note || !easyOn;
+    if (note && easyOn) easyBox.replaceChildren(el('h3', {}, '쉽게 보기'), ...(note.say || []).map((x) => el('p', {}, x)), note.look ? el('p', {class: 'textbook-look'}, el('strong', {}, '먼저 볼 곳'), note.look) : '');
     keep();
   }
   async function load() {

@@ -292,6 +292,10 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     const retryBtn = button('다시 보내기', () => { const p = ms.pend?.[t.id]; if (p) submit(p); }, 'mission-go');
     retryBtn.hidden = true;
     const helpBtn = button('', () => help(), 'secondary m-help');
+    // 쉽게 하기: 서버가 정한 순서대로 틀린 보기를 하나씩 지우거나 맞는 짝을 하나씩 놓는다. 지운 것은 의뢰 기록에 남아 다시 들어와도 그대로다.
+    const eased = (ms.ease ??= {})[t.id] ||= [];
+    const easeBtn = ui.ease && t.easeSteps ? button('쉽게 하기', () => ease(), 'secondary m-ease') : '';
+    for (const st of eased) ui.ease?.(st);
     const last = i === m.tasks.length - 1;
     const nextBtn = button(last ? '의뢰 마무리하기' : '다음 단계로', () => render(), 'mission-go');
     const wasDone = !!ms.done[t.id];
@@ -302,7 +306,26 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
     const skipBtn = t.optional && !wasDone ? button(current() < 0 ? '마무리 화면으로' : '할 일로 돌아가기', () => render(), 'secondary') : '';
     const peekBtn = preview ? button(i < m.tasks.length - 1 ? '다음 과제 보기' : '마무리 화면 보기', () => (i < m.tasks.length - 1 ? render(i + 1) : finish()), 'secondary m-peek') : '';
     if (initials) work.after(initials.node);
-    actions.append(t.hints?.length ? helpBtn : '', skipBtn, peekBtn, check, retryBtn, nextBtn);
+    if (easeBtn) { easeBtn.hidden = wasDone; easeBtn.disabled = eased.length >= t.easeSteps; }
+    actions.append(t.hints?.length ? helpBtn : '', easeBtn, skipBtn, peekBtn, check, retryBtn, nextBtn);
+    let easing = false;
+    async function ease() {
+      if (easing || !alive) return;
+      easing = true; easeBtn.disabled = true;
+      let r;
+      try { r = await api('mission-ease', {gameId: id, gameVersion: m.version, contentRevision: m.contentRevision, taskId: t.id, step: eased.length, ...gradingEdition}); }
+      catch { easing = false; easeBtn.disabled = false; return show(fb, '연결을 확인하고 다시 눌러 주세요.', 'warn'); }
+      easing = false;
+      if (!alive || !stage.isConnected) return;
+      const fresh = (r.steps || []).slice(eased.length);
+      if (!fresh.length) { easeBtn.disabled = true; return show(fb, '이 문제는 더 쉽게 할 수 있는 곳이 없어요. 「도움 받기」를 눌러 보세요.', 'warn'); }
+      for (const st of fresh) { eased.push(st); ui.ease(st); }
+      record('mission.hint', 'mission', {gameId: id, gameVersion: m.version, contentRevision: m.contentRevision, taskId: t.id, answer: 'ease', hint: hintUsed(), ...gradingEdition});
+      save();
+      easeBtn.disabled = !r.left;
+      const last = fresh[fresh.length - 1];
+      show(fb, last.place ? '맞는 짝 하나를 놓아 두었어요. 나머지를 이어서 해 봐요.' : Object.keys(last.hide || {}).length > 1 || Object.keys(last.hide || {})[0] ? '문항마다 틀린 보기를 하나씩 지웠어요.' : '틀린 보기 하나를 지웠어요.', 'ok');
+    }
     if (ui.auto && !wasDone && ms.pend?.[t.id]) { show(fb, '지난번에 보내지 못한 결과가 있어요. 다시 보내고 있어요.', 'warn'); setTimeout(() => { if (alive && stage.isConnected && !busy && ms.pend?.[t.id]) submit(ms.pend[t.id]); }, 0); }
     function paintHelp() { const n = ms.hints[t.id] || 0; helpBtn.textContent = n >= 3 ? '도움 다시 보기' : `도움 받기 (${n}/3)`; }
     function showHints() {
@@ -364,7 +387,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         window.dispatchEvent(new CustomEvent('dex-got', {detail: {ids: res.cards.map((c) => c.id)}}));
       }
       if (t.predict) poeCompare(t, fb);
-      check.hidden = true; nextBtn.hidden = false; if (skipBtn) skipBtn.hidden = true;
+      check.hidden = true; nextBtn.hidden = false; if (skipBtn) skipBtn.hidden = true; if (easeBtn) easeBtn.hidden = true;
       if (current() < 0) nextBtn.textContent = '의뢰 마무리하기';
       work.inert = true;
       refreshChrome(i);
@@ -508,6 +531,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
         lock: (v, why) => { btns.forEach((x) => (x.disabled = v)); note.hidden = !v; note.textContent = why || ''; },
         unlock() { this.lock(false); },
         mark: (w, ok) => { if (!ok) btns[opts.findIndex((o) => o.id === pick)]?.classList.add('recheck'); },
+        ease: (st) => { for (const x of Object.values(st.hide || {})) { const k = opts.findIndex((o) => o.id === x); if (k < 0) continue; btns[k].hidden = true; if (pick === x) { pick = null; btns[k].setAttribute('aria-checked', 'false'); } } },
       };
     },
     multi(t, {work}) {
@@ -523,16 +547,18 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       work.append(el('p', {class: 'm-how'}, '해당하는 것을 모두 누르세요.'), el('div', {class: 'm-options'}, btns));
       // 덜 골랐는지, 아닌 것을 함께 골랐는지 알려 준다(어느 보기인지는 알려 주지 않는다)
       const gap = (w) => (w.includes('extra') ? '고른 것 가운데 빼야 할 것이 섞여 있어요. 고른 보기를 하나씩 다시 따져 봐요.' : w.includes('more') ? '고른 것은 맞았는데, 맞는 것을 더 골라야 해요. 고르지 않은 보기도 다시 살펴봐요.' : '');
-      return {collect: () => (on.size ? {answer: [...on].join(',')} : '하나 이상 골라 주세요.'), wrongText: gap};
+      const ease = (st) => { for (const x of Object.values(st.hide || {})) { const k = opts.findIndex((o) => o.id === x); if (k < 0) continue; btns[k].hidden = true; on.delete(x); btns[k].setAttribute('aria-pressed', 'false'); } };
+      return {collect: () => (on.size ? {answer: [...on].join(',')} : '하나 이상 골라 주세요.'), wrongText: gap, ease};
     },
     quiz(t, {work}) {
-      const picks = {}, groups = {};
+      const picks = {}, groups = {}, shown = {};
       // 문항마다 같은 보기(예: 효율, 안전, 둘 다)를 쓰면 섞는 순서도 같게 해 같은 보기를 문항마다 새로 찾지 않게 한다
       const same = t.parts.length > 1 && t.parts.every((q) => q.options.map((o) => o.label).sort().join('|') === t.parts[0].options.map((o) => o.label).sort().join('|'));
       const order = same ? shuffled(t.parts[0].options, state.runId + t.id).map((o) => o.label) : null;
       for (const q of t.parts) {
         const qo = same ? order.map((label) => q.options.find((o) => o.label === label)) : shuffled(q.options, state.runId + t.id + q.id);
         const btns = qo.map((o) => radio(o.label, () => { picks[q.id] = o.id; btns.forEach((x, k) => x.setAttribute('aria-checked', String(qo[k].id === o.id))); groups[q.id].classList.remove('recheck'); }));
+        shown[q.id] = {qo, btns};
         groups[q.id] = el('fieldset', {class: 'm-quiz' + (q.figure ? ' with-fig' : '')}, el('legend', {}, q.prompt), figure(el, q.figure), el('div', {class: 'm-options', role: 'radiogroup', 'aria-label': q.prompt}, btns));
         work.append(groups[q.id]);
       }
@@ -546,6 +572,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
           return `아직 고르지 않은 문항이 ${empty.length}개 있어요. 테두리가 생긴 문항을 골라 주세요.`;
         },
         mark: (w) => { for (const k of w) groups[k]?.classList.add('recheck'); },
+        ease: (st) => { for (const [part, x] of Object.entries(st.hide || {})) { const g = shown[part]; const k = g ? g.qo.findIndex((o) => o.id === x) : -1; if (k < 0) continue; g.btns[k].hidden = true; if (picks[part] === x) { delete picks[part]; g.btns[k].setAttribute('aria-checked', 'false'); } } },
       };
     },
     sort(t, ctx) {
@@ -577,6 +604,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       return {
         collect: () => (Object.keys(where).length === t.items.length ? {roles: {...where}} : '모든 카드를 나눠 주세요.'),
         mark: (w) => { wrong = w; paint(); },
+        ease: (st) => { for (const [cid, bin] of Object.entries(st.place || {})) if (t.items.some((it) => it.id === cid)) where[cid] = bin; wrong = wrong.filter((w) => !(w in (st.place || {}))); paint(); },
       };
     },
     // 선 잇기: 왼쪽 카드와 오른쪽 카드를 하나씩 짝지어 선으로 잇는다(채점은 분류와 같다)
@@ -638,6 +666,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       return {
         collect: () => (t.items.every((it) => pairs[it.id]) ? {roles: {...pairs}} : '왼쪽 카드를 모두 이어 주세요.'),
         mark: (w) => { wrong = w; paint(); },
+        ease: (st) => { for (const [lid, rid] of Object.entries(st.place || {})) if (left.some((it) => it.id === lid) && right.some((x) => x.id === rid)) link(lid, rid); },
         stop: () => ro?.disconnect(),
       };
     },
@@ -739,6 +768,7 @@ export function missionScreen(host, {el, button, state, record, save, back, api,
       return {
         collect: () => { const roles = {}; for (const [k, s] of Object.entries(sels)) { if (!s.value) return '빈칸을 모두 채워 주세요.'; roles[k] = s.value; } return {roles}; },
         mark: (w) => { for (const [k, s] of Object.entries(sels)) s.classList.toggle('recheck', w.includes(k)); },
+        ease: (st) => { for (const [k, x] of Object.entries(st.hide || {})) { const s = sels[k]; const o = s && [...s.options].find((o) => o.value === x); if (!o) continue; if (s.value === x) s.value = ''; o.remove(); } },
       };
     },
     find(t, {work}) {

@@ -1127,6 +1127,8 @@ def public_mission(m):
     for t,o in zip(m.get('tasks',[]),out.get('tasks',[])):
         if t.get('type')=='word':o['pattern']=chosung(t['key'])
         if t.get('type')=='chain':o['links']=len(t['key'])
+        n=len(ease_steps(m,t))
+        if n:o['easeSteps']=n # 쉽게 하기를 쓸 수 있는 횟수. 0이면 단추를 두지 않는다
         same=current_tasks.get(t['id'])
         active=same if same and answer_support.fingerprint(same)==answer_support.fingerprint(t) else t
         if answer_support.supports(active):
@@ -1166,6 +1168,32 @@ def mission_summary(m):
     # 퀘스트 수첩의 단계는 필수 과제만 센다. 선택 과제(더 해보기)는 extraIds로 따로 준다.
     req=[t for t in m['tasks'] if not (t.get('optional') or t.get('required') is False)]
     return {'id':m['id'],'title':m['title'],'quest':m['quest'],'place':m['place'],'zone':m['zone'],'goal':m['goal'],'steps':[s['title'] for s in req],'taskIds':[s['id'] for s in req],'extraIds':[s['id'] for s in m['tasks'] if s not in req],'wrap':m.get('wrap',[]),'solved':(m.get('finish') or {}).get('title','')}
+# 쉽게 하기: 학생이 누르면 틀린 보기를 하나씩 지우거나(고르기, 여러 문항, 빈칸) 맞는 짝을 하나씩 놓아 준다(나누기, 선 잇기).
+# 단계는 늘 같은 순서로 나오고, 학생이 혼자 판단할 몫(보기 둘, 짝 하나)은 남긴다. 채점은 그대로 judge_mission이 한다.
+def ease_steps(m,task):
+    if task.get('diagnostic') or task.get('component') or task.get('optional') or task.get('required') is False:return []
+    kind=task['type'];order=lambda xs:sorted(xs,key=lambda x:hashlib.sha256((m['id']+task['id']+x).encode()).hexdigest())
+    def per_group(groups):
+        # groups: [(묶음 id, [틀린 보기 id], 보기 수)] → 차례마다 묶음마다 틀린 보기 하나, 보기 둘은 남긴다
+        steps=[];r=0
+        while True:
+            hide={g:wr[r] for g,wr,n in groups if r<len(wr) and n-(r+1)>=2}
+            if not hide:return steps
+            steps.append({'hide':hide});r+=1
+    if kind=='choice' and task.get('key') is not None:
+        wrong=order([o['id'] for o in task['options'] if o['id']!=task['key']])
+        return [{'hide':{'':x}} for x in wrong[:max(0,len(task['options'])-2)]]
+    if kind=='multi' and task.get('keys') is not None:
+        wrong=order([o['id'] for o in task['options'] if o['id'] not in task['keys']])
+        return [{'hide':{'':x}} for x in wrong[:-1]]
+    if kind=='quiz':
+        return per_group([(q['id'],order([o['id'] for o in q['options'] if o['id']!=q['key']]),len(q['options'])) for q in task['parts'] if q.get('key') is not None])
+    if kind=='fill' and isinstance(task.get('key'),dict):
+        return per_group([(b['id'],order([o['id'] for o in b['options'] if o['id']!=task['key'].get(b['id'])]),len(b['options'])) for b in task['blanks'] if b['id'] in task['key']])
+    if kind=='sort' and not task.get('distinct') and isinstance(task.get('key'),dict):
+        items=order(list(task['key']))
+        return [{'place':{k:task['key'][k]}} for k in items[:-1]]
+    return []
 def judge_mission(m,task,p):
     """과제 종류별로 응답을 확인하고 correct(충족 후보)와 diagnosticCorrect(진단)를 정한다."""
     kind=task['type'];a=p.get('answer','');roles=p.get('roles',{});out={}
@@ -1405,7 +1433,7 @@ def validate_event(e, db=None):
             with conn() as c:task=answer_task(m,task,p.get('answerRevision'),c)
         result.update(taskId=m['id']+'.'+task['id'],taskTitle=task['title'],responseText=teaching.response_text(task,p),elementIds=task.get('elements',[]))
         if k=='mission.hint':
-            if p.get('answer') not in {'help','initials'}:raise ValueError('도움 기록 오류')
+            if p.get('answer') not in {'help','initials','ease'}:raise ValueError('도움 기록 오류')
             return result
         result.update(judge_mission(m,task,p));return result
     if t=='mission':raise ValueError('미션 과제 오류')
@@ -2455,6 +2483,15 @@ class Handler(BaseHTTPRequestHandler):
                 r=validate_event(event)
                 if r.get('evaluation')=='version_unavailable':raise ValueError('의뢰 자료가 바뀌었어요. 의뢰를 다시 열어 주세요.')
                 return self.send_json(200,{k:r[k] for k in ('matched','actualLabel','observed','correct','feedback','evaluation') if k in r})
+            if path=='/api/mission-ease':
+                if set(data)-{'gameId','taskId','contentRevision','answerRevision','gameVersion','step'} or type(data.get('step')) is not int or not 0<=data['step']<=40:raise ValueError('도움 요청을 확인해 주세요.')
+                with conn() as c:
+                    m=teaching.resolve(c,missions(),data.get('gameId'),data.get('contentRevision'),data.get('gameVersion'))
+                    task=next((x for x in (m or {}).get('tasks',[]) if x['id']==data.get('taskId')),None)
+                    if not task:raise ValueError('없는 과제입니다.')
+                    task=answer_task(m,task,data.get('answerRevision'),c)
+                steps=ease_steps(m,task)
+                return self.send_json(200,{'steps':steps[:data['step']+1],'left':max(0,len(steps)-data['step']-1)})
             if path=='/api/mission-check':
                 with conn() as c:
                     m=teaching.resolve(c,missions(),data.get('gameId'),data.get('contentRevision'),data.get('gameVersion'))

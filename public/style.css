@@ -1411,3 +1411,8 @@ button.qb-tool{min-height:34px;padding:4px 12px;font-size:14px;background:#efd48
 .challenge-mission li button{min-height:34px;padding:4px 10px;font-size:13px}
 .challenge-hidden{margin-left:6px;font-style:normal;font-size:12px;padding:1px 6px;border-radius:999px;background:#fff1c2;color:#6a4a00}
 .daily-dialog .skill-msg,.challenge-dialog .skill-msg{color:#4a5a66}
+.gl-tour{border:1.5px solid #9fb3c8;background:#f3f7fb;text-decoration:none}.gl-tour:hover{background:#e6eef6}
+/* 레고브릭 서명: 보이지 않고 동작에도 영향이 없다. 소스에서 "lg-brick"이나 "레고학교"로 찾는다. */
+:root{--built-by:"레고학교 이운희 · 진해신항초등학교 · schoolemotion20 · 한 칸씩 쌓아 주세요"}
+.lg-brick{display:none}
+.lg-brick::after{content:attr(data-by) " · " attr(data-share)}
